@@ -60,7 +60,8 @@ jobs:
           apk="ed22-kiosk-$KIOSK_VERSION_CODE.apk"
           cp app/build/outputs/apk/release/app-release.apk "public/$apk"
           cp "public/$apk" ed22-kiosk.apk
-          jq -n --argjson code "$KIOSK_VERSION_CODE" --arg name "$KIOSK_VERSION_NAME" --arg url "$apk" \
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/build-$KIOSK_VERSION_CODE/$apk"
+          jq -n --argjson code "$KIOSK_VERSION_CODE" --arg name "$KIOSK_VERSION_NAME" --arg url "$url" \
             --arg sha "$(sha256sum "public/$apk" | cut -d' ' -f1)" \
             '{versionCode: $code, versionName: $name, url: $url, sha256: $sha}' > public/update.json
           cat public/update.json
@@ -72,7 +73,7 @@ jobs:
             ed22-kiosk.apk
             public/update.json
 
-      # One GitHub Release per build (private, like the repo): a record of every shipped APK.
+      # One GitHub Release per build. Kiosks poll releases/latest/download/update.json.
       - name: Publish release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.KIOSK_SIGNED == 'true'
         uses: softprops/action-gh-release@v2
@@ -80,28 +81,7 @@ jobs:
           tag_name: build-${{ env.KIOSK_VERSION_CODE }}
           name: ED22 Kiosk ${{ env.KIOSK_VERSION_NAME }}
           target_commitish: ${{ github.sha }}
+          make_latest: 'true'
           files: |
             public/ed22-kiosk-${{ env.KIOSK_VERSION_CODE }}.apk
             public/update.json
-
-      # Public hosting that kiosks can reach without a token. Turned on by setting the repository
-      # variable KIOSK_PUBLISH_PAGES=true and Settings › Pages › Source = GitHub Actions.
-      - name: Package for GitHub Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.KIOSK_SIGNED == 'true' && vars.KIOSK_PUBLISH_PAGES == 'true'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-  pages:
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.KIOSK_PUBLISH_PAGES == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - id: deploy
-        uses: actions/deploy-pages@v4

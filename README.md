@@ -211,25 +211,23 @@ a network), and installs anything newer.
   silent. Android then restarts the kiosk, which locks itself again. Without device owner, the
   kiosk only reports in the parent menu that an update is available. Android rejects any APK that
   is not signed with the same key.
-- **Every build** is also kept as a GitHub Release tagged `build-<versionCode>` (APK +
-  `update.json`), and as the run's `ed22-kiosk-apk` artifact.
+- **Every build** becomes a GitHub Release tagged `build-<versionCode>` (APK + `update.json`),
+  and is also kept as the run's `ed22-kiosk-apk` artifact. To stop a bad build from spreading,
+  delete its release (or mark it pre-release) so that the previous one becomes "latest", and then
+  push a fix. Android never installs a lower `versionCode`, so kiosks that already updated have
+  to wait for that fix.
 
-### Hosting the manifest
+### Where updates are published
 
-Kiosks can't sign in to GitHub, and this repository is private, so release assets aren't
-downloadable by devices. The manifest URL is `KioskConfig.UPDATE_MANIFEST_URL` (default:
-`https://apex2060.github.io/ed22-kiosk/update.json`). The workflow can publish there with
-**GitHub Pages**:
+Updates are published as **GitHub Releases** of this (public) repository. Kiosks poll
+`KioskConfig.UPDATE_MANIFEST_URL`, which is
+`https://github.com/apex2060/ed22-kiosk/releases/latest/download/update.json`, the manifest of
+the newest release. Its `url` points at that release's APK
+(`…/releases/download/build-<n>/ed22-kiosk-<n>.apk`). No token is needed.
 
-1. Settings › Pages › Build and deployment › Source: **GitHub Actions**. Pages from a private
-   repository needs a paid GitHub plan. The published site is public, but the repository stays
-   private.
-2. Settings › Secrets and variables › Actions › Variables: add `KIOSK_PUBLISH_PAGES` = `true`.
-3. Push to main. The `pages` job publishes `update.json` and the APK.
-
-To host somewhere else, such as `https://us.ed22.org/kiosk/`, copy `update.json` and the APK
-from each release to that folder (or add a deploy step to the workflow). Then change
-`UPDATE_MANIFEST_URL`, push, and install that build on each kiosk once by hand.
+To host updates somewhere else (for example `https://us.ed22.org/kiosk/update.json`), copy each
+release's `update.json` and APK there, change `UPDATE_MANIFEST_URL`, push, and install that build
+on each kiosk once.
 
 The first build that contains the updater must also be installed by hand (`adb install -r`).
 
