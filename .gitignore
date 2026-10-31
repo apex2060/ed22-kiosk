@@ -13,3 +13,4 @@ signing/
 *.p12
 *.pem
 *.b64
+.kotlin/

@@ -9,6 +9,13 @@ object KioskConfig {
     /** Every top-level page visit is POSTed here as JSON. */
     const val HISTORY_URL = "https://us.ed22.org/me/history"
 
+    /**
+     * The self-updater polls this JSON file: {versionCode, versionName, url, sha256}. `url` may be
+     * relative to the manifest. It must be reachable without auth, over https (see README › Updates).
+     */
+    const val UPDATE_MANIFEST_URL = "https://apex2060.github.io/ed22-kiosk/update.json"
+    const val UPDATE_INTERVAL_HOURS = 6L
+
     /** Only pages on this domain (and its subdomains) get `window.kiosk` and automatic camera/mic/location access. */
     const val TRUSTED_DOMAIN = "ed22.org"
 

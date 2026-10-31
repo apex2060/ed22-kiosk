@@ -21,8 +21,9 @@ android {
         applicationId = "org.ed22.kiosk"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI sets these from the run number so every push to main is a newer version (see README › Updates).
+        versionCode = System.getenv("KIOSK_VERSION_CODE")?.toInt() ?: 1
+        versionName = System.getenv("KIOSK_VERSION_NAME") ?: "0.1.0"
     }
 
     signingConfigs {
@@ -61,4 +62,5 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }

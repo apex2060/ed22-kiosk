@@ -12,6 +12,7 @@ system information and device features, reports every page visit to
 - [The parent menu](#the-parent-menu)
 - [Browsing and history reporting](#browsing-and-history-reporting)
 - [The `kiosk.*` JavaScript API](#the-kiosk-javascript-api)
+- [Automatic updates](#automatic-updates)
 - [Building](#building)
 - [Configuration](#configuration)
 
@@ -46,11 +47,14 @@ while charging.
 
 ### Updating
 
+Kiosks update themselves (see [Automatic updates](#automatic-updates)). To update one by hand:
+
 ```sh
 adb install -r ed22-kiosk.apk
 ```
 
-Updates must be signed with the same key as the installed app (see [Building](#building)).
+Updates must be signed with the same key as the installed app (see [Building](#building)), and
+must have a higher `versionCode`.
 
 ### Without device owner
 
@@ -68,6 +72,7 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 | Open Wi-Fi settings | Exits kiosk mode and opens Wi-Fi settings. |
 | Reload start page | Goes back to https://us.ed22.org/me. |
 | Change PIN | Sets a new parent PIN. |
+| Updates | Shows the installed version, the last update check and its result, with a **Check for updates now** button. |
 | Remove kiosk lock | Removes device-owner status so the app can be uninstalled. Locking again needs a factory reset. |
 
 Five wrong PINs in a row lock the prompt for 60 seconds.
@@ -189,10 +194,49 @@ and pause while the screen is off.
 [`docs/kiosk-test.html`](docs/kiosk-test.html) exercises every call. Host it anywhere on
 ed22.org and open it in the kiosk.
 
+## Automatic updates
+
+**To ship an update, push to `main`.** GitHub Actions builds a signed APK and publishes it with
+an update manifest. Each kiosk checks that manifest at app start and every 6 hours (when it has
+a network), and installs anything newer.
+
+- **Version numbers:** CI sets `versionCode` to the workflow run number + 100 and `versionName`
+  to `0.1.<versionCode>`. Every push to main is therefore newer than the last. Local builds
+  are `versionCode` 1 unless you set `KIOSK_VERSION_CODE` / `KIOSK_VERSION_NAME`.
+- **Manifest** (`update.json`): `{"versionCode": 142, "versionName": "0.1.142", "url":
+  "ed22-kiosk-142.apk", "sha256": "…"}`. `url` can be relative to the manifest or absolute,
+  and must be https.
+- **On the device:** if `versionCode` is higher than the installed one, the kiosk downloads the
+  APK, checks its SHA-256, and installs it with PackageInstaller. As **device owner** this is
+  silent. Android then restarts the kiosk, which locks itself again. Without device owner, the
+  kiosk only reports in the parent menu that an update is available. Android rejects any APK that
+  is not signed with the same key.
+- **Every build** is also kept as a GitHub Release tagged `build-<versionCode>` (APK +
+  `update.json`), and as the run's `ed22-kiosk-apk` artifact.
+
+### Hosting the manifest
+
+Kiosks can't sign in to GitHub, and this repository is private, so release assets aren't
+downloadable by devices. The manifest URL is `KioskConfig.UPDATE_MANIFEST_URL` (default:
+`https://apex2060.github.io/ed22-kiosk/update.json`). The workflow can publish there with
+**GitHub Pages**:
+
+1. Settings › Pages › Build and deployment › Source: **GitHub Actions**. Pages from a private
+   repository needs a paid GitHub plan. The published site is public, but the repository stays
+   private.
+2. Settings › Secrets and variables › Actions › Variables: add `KIOSK_PUBLISH_PAGES` = `true`.
+3. Push to main. The `pages` job publishes `update.json` and the APK.
+
+To host somewhere else, such as `https://us.ed22.org/kiosk/`, copy `update.json` and the APK
+from each release to that folder (or add a deploy step to the workflow). Then change
+`UPDATE_MANIFEST_URL`, push, and install that build on each kiosk once by hand.
+
+The first build that contains the updater must also be installed by hand (`adb install -r`).
+
 ## Building
 
-GitHub Actions builds the APK on every push (see `.github/workflows/build.yml`); download it
-from the run's **Artifacts**, or push a `v*` tag to attach it to a GitHub release.
+GitHub Actions builds the APK on every push and pull request (see `.github/workflows/build.yml`);
+download it from the run's **Artifacts**. Only pushes to `main` are published as updates.
 
 Every build must be signed with the **same key**, or `adb install -r` updates will fail. Add
 these repository secrets (Settings › Secrets and variables › Actions):
@@ -221,4 +265,4 @@ debug key.
 
 Everything site-specific is in
 [`KioskConfig.kt`](app/src/main/java/org/ed22/kiosk/KioskConfig.kt): the start page, the history
-endpoint, the trusted domain for `window.kiosk`, and the corner-tap settings.
+endpoint, the trusted domain for `window.kiosk`, the corner-tap settings, and the update manifest URL.

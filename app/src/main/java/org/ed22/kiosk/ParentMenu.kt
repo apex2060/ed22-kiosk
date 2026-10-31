@@ -67,6 +67,7 @@ object ParentMenu {
             "Open Wi-Fi settings",
             "Reload start page",
             "Change PIN",
+            "Updates (${BuildConfig.VERSION_NAME})",
             "Remove kiosk lock (allow uninstall)",
         )
         AlertDialog.Builder(activity)
@@ -79,8 +80,22 @@ object ParentMenu {
                     3 -> activity.startActivity(
                         Intent(activity, PinSetupActivity::class.java).putExtra(PinSetupActivity.EXTRA_CHANGE, true)
                     )
-                    4 -> confirmRemove(activity)
+                    4 -> showUpdates(activity)
+                    5 -> confirmRemove(activity)
                 }
+            }
+            .setNegativeButton("Close", null)
+            .setOnDismissListener { activity.hideSystemUi() }
+            .show()
+    }
+
+    private fun showUpdates(activity: MainActivity) {
+        AlertDialog.Builder(activity)
+            .setTitle("Updates")
+            .setMessage(Updater.statusText(activity))
+            .setPositiveButton("Check for updates now") { _, _ ->
+                Updater.checkNow(activity)
+                toast(activity, "Checking for updates. Reopen this screen in a minute to see the result.")
             }
             .setNegativeButton("Close", null)
             .setOnDismissListener { activity.hideSystemUi() }

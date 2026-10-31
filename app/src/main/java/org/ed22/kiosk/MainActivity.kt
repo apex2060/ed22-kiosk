@@ -105,6 +105,7 @@ class MainActivity : AppCompatActivity() {
             webView.loadUrl(KioskConfig.START_URL)
         }
         HistoryReporter.flush(this)
+        Updater.schedule(this)
     }
 
     override fun onResume() {
