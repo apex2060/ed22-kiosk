@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offline</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; align-items: center; justify-content: center; text-align: center;
+         font-family: system-ui, sans-serif; background: #10243f; color: #fff; padding: 24px; box-sizing: border-box; }
+  h1 { font-size: 1.6rem; margin: 0 0 12px; }
+  p { opacity: .85; margin: 0 0 24px; }
+  button { font-size: 1.1rem; padding: 12px 28px; border: 0; border-radius: 999px; background: #fff; color: #10243f; }
+</style>
+</head>
+<body>
+<div>
+  <h1>Can't reach the internet</h1>
+  <p>We'll keep trying. Ask a grown-up to check the Wi-Fi.</p>
+  <button id="retry">Try again</button>
+</div>
+<script>
+  var target = decodeURIComponent(location.hash.slice(1)) || 'https://us.ed22.org/me';
+  if (!/^https?:\/\//.test(target)) target = 'https://us.ed22.org/me';
+  function retry() { location.replace(target); }
+  document.getElementById('retry').onclick = retry;
+  window.addEventListener('online', retry);
+  setInterval(function () { if (navigator.onLine) retry(); }, 15000);
+</script>
+</body>
+</html>

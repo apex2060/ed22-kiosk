@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiosk test page</title>
+<!-- Host this on an ed22.org page (window.kiosk only exists there) and open it in the kiosk. -->
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #f4f6fa; color: #111; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  #status { margin: 0 0 16px; color: #555; }
+  .grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  button { padding: 10px 14px; font-size: 0.95rem; border: 1px solid #c8d0dc; border-radius: 8px; background: #fff; }
+  button:active { background: #e3e9f3; }
+  h2 { font-size: 1rem; margin: 20px 0 8px; }
+  pre { background: #10243f; color: #d6e4ff; padding: 12px; border-radius: 8px; white-space: pre-wrap;
+        word-break: break-word; max-height: 40vh; overflow: auto; font-size: 0.8rem; }
+  video { width: 100%; max-width: 360px; background: #000; border-radius: 8px; }
+</style>
+</head>
+<body>
+<h1>Kiosk test page</h1>
+<p id="status">Checking for window.kiosk…</p>
+
+<h2>System info</h2>
+<div class="grid">
+  <button data-call="getBattery">Battery</button>
+  <button data-call="getWifi">Wi-Fi</button>
+  <button data-call="getNetwork">Network</button>
+  <button data-call="getDevice">Device</button>
+  <button data-call="getStorage">Storage</button>
+  <button data-call="getMemory">Memory</button>
+  <button id="location">Location</button>
+  <button id="perms">Permissions</button>
+  <button id="sensorList">Sensor list</button>
+</div>
+
+<h2>Sensors and media</h2>
+<div class="grid">
+  <button id="accel">Accelerometer on/off</button>
+  <button id="camera">Camera + mic (getUserMedia)</button>
+  <button id="motion">DeviceMotion (web API)</button>
+</div>
+<video id="video" autoplay playsinline muted hidden></video>
+
+<h2>Controls</h2>
+<div class="grid">
+  <button id="vibrate">Vibrate</button>
+  <button id="torchOn">Torch on</button>
+  <button id="torchOff">Torch off</button>
+  <button id="dim">Brightness 20%</button>
+  <button id="bright">Brightness auto</button>
+  <button id="volume">Volume 50%</button>
+  <button id="speak">Speak</button>
+  <button id="toast">Toast</button>
+  <button id="goHome">Go home</button>
+</div>
+
+<h2>Output</h2>
+<pre id="out"></pre>
+
+<script>
+  var out = document.getElementById('out');
+  function log(label, value) {
+    var text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    out.textContent = '[' + new Date().toLocaleTimeString() + '] ' + label + '\n' + text + '\n\n' + out.textContent;
+  }
+  function run(label, promise) {
+    promise.then(function (r) { log(label, r); }, function (e) { log(label + ' FAILED', e.message || String(e)); });
+  }
+  function on(id, fn) { document.getElementById(id).addEventListener('click', fn); }
+
+  if (!window.kiosk) {
+    document.getElementById('status').textContent =
+      'window.kiosk is not available. Open this page inside ED22 Kiosk, on an https://ed22.org address.';
+  } else {
+    kiosk.ready.then(function () {
+      document.getElementById('status').textContent =
+        'Connected to ED22 Kiosk ' + kiosk.version + ' on device ' + kiosk.deviceId;
+    });
+    kiosk.on('battery', function (b) { log('event: battery', b); });
+    kiosk.on('network', function (n) { log('event: network', n); });
+  }
+
+  document.querySelectorAll('[data-call]').forEach(function (b) {
+    b.addEventListener('click', function () { run(b.dataset.call, kiosk[b.dataset.call]()); });
+  });
+  on('location', function () { run('getLocation', kiosk.getLocation({ highAccuracy: true })); });
+  on('perms', function () { run('permissions.request', kiosk.permissions.request(['camera', 'microphone', 'location'])); });
+  on('sensorList', function () { run('sensors.list', kiosk.sensors.list()); });
+
+  var accelId = null;
+  on('accel', function () {
+    if (accelId) { kiosk.sensors.clear(accelId); accelId = null; log('accelerometer', 'stopped'); return; }
+    kiosk.sensors.watch('accelerometer', function (r) {
+      document.getElementById('status').textContent =
+        'accel x=' + r.values[0].toFixed(2) + ' y=' + r.values[1].toFixed(2) + ' z=' + r.values[2].toFixed(2);
+    }, { rateMs: 200 }).then(function (id) { accelId = id; log('accelerometer', 'watching, id ' + id); },
+                            function (e) { log('accelerometer FAILED', e.message); });
+  });
+
+  on('camera', function () {
+    navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(function (stream) {
+      var v = document.getElementById('video');
+      v.hidden = false;
+      v.srcObject = stream;
+      log('getUserMedia', stream.getTracks().map(function (t) { return t.kind + ': ' + t.label; }));
+    }, function (e) { log('getUserMedia FAILED', e.name + ': ' + e.message); });
+  });
+
+  on('motion', function () {
+    var n = 0;
+    window.addEventListener('devicemotion', function handler(e) {
+      if (++n > 5) { window.removeEventListener('devicemotion', handler); return; }
+      var a = e.accelerationIncludingGravity;
+      log('devicemotion', { x: a.x, y: a.y, z: a.z });
+    });
+  });
+
+  on('vibrate', function () { run('vibrate', kiosk.vibrate([200, 100, 200])); });
+  on('torchOn', function () { run('setTorch', kiosk.setTorch(true)); });
+  on('torchOff', function () { run('setTorch', kiosk.setTorch(false)); });
+  on('dim', function () { run('setBrightness', kiosk.setBrightness(0.2)); });
+  on('bright', function () { run('setBrightness', kiosk.setBrightness(-1)); });
+  on('volume', function () { run('setVolume', kiosk.setVolume(0.5)); });
+  on('speak', function () { run('speak', kiosk.speak('Hello from the kiosk')); });
+  on('toast', function () { run('toast', kiosk.toast('Hello from the page')); });
+  on('goHome', function () { run('goHome', kiosk.goHome()); });
+</script>
+</body>
+</html>
