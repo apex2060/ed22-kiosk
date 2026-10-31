@@ -2,8 +2,8 @@
 
 An Android kiosk app that locks a device to a full-screen browser starting at
 **https://us.ed22.org/me**. It gives ed22.org pages a `window.kiosk` JavaScript API for
-system information and device features, reports every page visit to
-**https://us.ed22.org/me/history**, and hides a PIN-protected parent menu behind
+system information and device features, can report every page visit to
+**https://us.ed22.org/me/history** (currently turned off), and hides a PIN-protected parent menu behind
 **4 quick taps in the bottom-left corner**.
 
 ## Contents
@@ -82,6 +82,10 @@ Five wrong PINs in a row lock the prompt for 60 seconds.
 There is **no domain allowlist**: the kiosk starts on us.ed22.org but links can go anywhere on
 the web. Links that would leave the app (`tel:`, `mailto:`, Play Store and other app links)
 are ignored; `intent:` links open their web fallback if they have one.
+
+> **History reporting is currently off.** `KioskConfig.HISTORY_ENABLED` is `false`, so the app
+> sends no history posts and queues no visits, and it deletes any queue left by an older build at
+> startup. Set it to `true` and push to turn on the behavior described below.
 
 Every **top-level page visit** (including single-page-app route changes, but not iframes) is
 sent as a `POST` to `https://us.ed22.org/me/history`:

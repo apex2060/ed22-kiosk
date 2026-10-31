@@ -9,6 +9,9 @@ object KioskConfig {
     /** Every top-level page visit is POSTed here as JSON. */
     const val HISTORY_URL = "https://us.ed22.org/me/history"
 
+    /** History reporting is off for now: no visits are sent or queued, and any old queue is deleted. */
+    const val HISTORY_ENABLED = false
+
     /**
      * The self-updater polls this JSON file: {versionCode, versionName, url, sha256}. `url` may be
      * relative to the manifest. It must be reachable without auth, over https (see README › Automatic updates).

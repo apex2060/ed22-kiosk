@@ -32,6 +32,7 @@ object HistoryReporter {
     private var loaded = false
 
     fun report(ctx: Context, url: String, title: String?, referrer: String?) {
+        if (!KioskConfig.HISTORY_ENABLED) return
         val app = ctx.applicationContext
         val visit = JSONObject()
             .put("url", url)
@@ -53,10 +54,21 @@ object HistoryReporter {
     /** Retries anything still queued, e.g. when the network comes back. */
     fun flush(ctx: Context) {
         val app = ctx.applicationContext
+        if (!KioskConfig.HISTORY_ENABLED) {
+            executor.execute { discardQueue(app) }
+            return
+        }
         executor.execute {
             load(app)
             if (queue.isNotEmpty()) drain(app)
         }
+    }
+
+    /** Drops every queued visit, in memory and on disk, so nothing is sent later. */
+    private fun discardQueue(app: Context) {
+        queue.clear()
+        loaded = true
+        File(app.filesDir, QUEUE_FILE).delete()
     }
 
     private fun drain(app: Context) {
