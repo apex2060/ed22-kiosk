@@ -31,6 +31,10 @@
     (listeners[msg.event] || []).slice().forEach(function (fn) {
       try { fn(msg.data); } catch (e) { console.error(e); }
     });
+    // Legacy window.Android NFC callback: nfcScanResult(url, or the tag id when there is no URL).
+    if (msg.event === 'nfc' && typeof window.nfcScanResult === 'function') {
+      try { window.nfcScanResult(msg.data.url || msg.data.id); } catch (e) { console.error(e); }
+    }
   };
 
   function call(method, args) {
@@ -53,7 +57,7 @@
     /** Low-level access to any native method: kiosk.call('getBattery'). */
     call: call,
 
-    /** Subscribe to pushed events: 'battery', 'network'. */
+    /** Subscribe to pushed events: 'battery', 'network', 'nfc', 'speech', 'focus', 'screen'. */
     on: function (event, fn) { (listeners[event] = listeners[event] || []).push(fn); },
     off: function (event, fn) {
       var list = listeners[event];
@@ -70,6 +74,23 @@
     getStorage: method('getStorage'),
     getMemory: method('getMemory'),
     getLocation: function (options) { return call('getLocation', options); },
+    getScreen: method('getScreen'),
+    isInFocus: method('isInFocus'),
+
+    // NFC tag reading (scans arrive as 'nfc' events while enabled)
+    nfc: {
+      status: method('nfcStatus'),
+      enable: method('nfcEnable'),
+      disable: method('nfcDisable')
+    },
+
+    // Native key/value storage that survives clearing web data (string values)
+    storage: {
+      get: function (key) { return call('storageGet', { key: String(key) }); },
+      set: function (key, value) { return call('storageSet', { key: String(key), value: String(value) }); },
+      remove: function (key) { return call('storageRemove', { key: String(key) }); },
+      keys: method('storageKeys')
+    },
 
     // Permissions: 'camera', 'microphone', 'location', 'phone', 'activity'
     permissions: {
@@ -105,6 +126,8 @@
     setOrientation: function (orientation) { return call('setOrientation', { orientation: orientation }); },
     toast: function (text) { return call('toast', { text: String(text) }); },
     speak: function (text) { return call('speak', { text: String(text) }); },
+    stopSpeaking: method('stopSpeaking'),
+    cancelSpeak: function (id) { return call('cancelSpeak', { id: String(id) }); },
     reload: method('reload'),
     goHome: method('goHome'),
     reboot: method('reboot')
@@ -118,4 +141,9 @@
   });
 
   Object.defineProperty(window, 'kiosk', { value: kiosk, writable: false, configurable: false });
+
+  // Pages written for the legacy bridge only define nfcScanResult; turn NFC on for them.
+  window.addEventListener('load', function () {
+    if (typeof window.nfcScanResult === 'function') kiosk.nfc.enable();
+  });
 })();

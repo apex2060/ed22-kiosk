@@ -165,8 +165,10 @@ if (window.kiosk) {
 | --- | --- |
 | `kiosk.ready` | Promise that resolves once connected; also fires a `kioskready` event on `window`. |
 | `kiosk.version`, `kiosk.deviceId` | Filled in once `kiosk.ready` resolves. |
-| `kiosk.getBattery()` | `{level, charging, full, plugged, health, temperatureC, voltageMv}` |
-| `kiosk.getNetwork()` | `{online, type, metered, downstreamKbps, upstreamKbps}` (`type` is `wifi`, `cellular`, `ethernet`, `vpn`, `other` or `none`) |
+| `kiosk.getBattery()` | `{level: 0-100 int, charging: bool, plugged: 'ac'\|'usb'\|'wireless'\|null}`, plus extras `full, health, temperatureC, voltageMv` |
+| `kiosk.getNetwork()` | `{connected: bool, type: 'wifi'\|'cellular'\|'ethernet'\|'none', metered: bool}`, plus extras `online` (internet verified), `downstreamKbps, upstreamKbps`. A VPN reports its underlying type. Any other transport that has internet reports `wifi` |
+| `kiosk.getScreen()` | `{on: bool, brightness: 0-1 float or -1 (system default), orientation: 'portrait'\|'landscape'}` |
+| `kiosk.isInFocus()` | `true` when the kiosk window has input focus (`false` while, for example, the parent PIN dialog is open) |
 | `kiosk.getWifi()` | `{enabled, connected, ssid, bssid, rssi, signalLevel (0-4), linkSpeedMbps, frequencyMhz, ipAddress}` |
 | `kiosk.getDevice()` | `{deviceId, serial, manufacturer, brand, model, device, androidVersion, sdkInt, securityPatch, appVersion, isDeviceOwner, lockTaskActive, locale, timeZone, uptimeMs, screen}` |
 | `kiosk.getStorage()` | `{totalBytes, freeBytes}` |
@@ -176,10 +178,72 @@ if (window.kiosk) {
 ### Events
 
 ```js
-kiosk.on('battery', b => ...);   // level, charging or plug state changed
+kiosk.on('battery', b => ...);   // level, charging or plug state changed (same shape as getBattery)
 kiosk.on('network', n => ...);   // connectivity changed (same shape as getNetwork)
+kiosk.on('focus', e => ...);     // {focused: bool} when the kiosk window gains or loses focus
+kiosk.on('screen', e => ...);    // {on: bool} when the screen turns on or off
+kiosk.on('nfc', tag => ...);     // a tag was scanned (see NFC)
+kiosk.on('speech', e => ...);    // text-to-speech progress (see Speech)
 kiosk.off('battery', handler);
 ```
+
+Events go only to the top-level page (not iframes), and only while it is a trusted ed22.org page.
+
+### NFC
+
+| Call | Returns |
+| --- | --- |
+| `kiosk.nfc.status()` | `{available, enabled, systemEnabled}`: `available` = the device has NFC, `enabled` = the kiosk is reading tags for the page, `systemEnabled` = NFC is turned on in Android settings |
+| `kiosk.nfc.enable()` | Starts reading tags (same shape as `status()`) |
+| `kiosk.nfc.disable()` | Stops reading tags (same shape as `status()`) |
+
+While enabled, each scan fires `kiosk.on('nfc', fn)` with:
+
+```js
+{
+  id: '04A2B3C4D5E6F7',            // tag UID, uppercase hex
+  url: 'https://us.ed22.org/x',     // first URI record (incl. inside a smart poster), or null
+  records: [                        // NDEF records, [] for tags without NDEF
+    { type: 'uri', tnf: 1, url: '…', payload: '…', encoding: 'utf8' },
+    { type: 'text', tnf: 1, lang: 'en', payload: 'hello', encoding: 'utf8' },
+    { type: 'mime', tnf: 2, mimeType: 'application/json', payload: '{…}', encoding: 'utf8' },
+    { type: 'external', tnf: 4, recordType: 'android.com:pkg', payload: '…', encoding: 'utf8' },
+    { type: 'smartposter', tnf: 1, url: '…', records: [ … ] },
+    // also 'empty', 'well_known' and 'unknown'; binary payloads use encoding: 'base64'
+  ],
+  techs: ['NfcA', 'MifareUltralight', 'Ndef']
+}
+```
+
+- Reading uses Android **reader mode**. It works while the kiosk is in the foreground with the screen on and unlocked. While it is on, Android does not open other apps or the browser for scanned tags. Once enabled, it stays on (even on non-ed22 pages, where scans are ignored) until `disable()` is called. After an app restart (including a self-update) it is off until a page calls `enable()` again.
+- **Legacy pages:** if the page defines `window.nfcScanResult`, the kiosk turns NFC on after the page loads and calls `nfcScanResult(url)` for each scan, or `nfcScanResult(id)` when the tag has no URL. This matches the old `Android.useJavaScriptCallbackNFC`.
+- Devices without NFC: `available` is `false`, and `enable()` does nothing.
+
+### Speech
+
+| Call | Returns |
+| --- | --- |
+| `kiosk.speak(text)` | Resolves with an utterance id (for example `'u3'`) once queued. Utterances play in order |
+| `kiosk.cancelSpeak(id)` | Removes a queued utterance or stops it if it is playing; `false` if it already finished |
+| `kiosk.stopSpeaking()` | Stops the current utterance and clears the queue |
+
+`kiosk.on('speech', e => ...)` gets `{id, state}`, where `state` is `'start'`, `'done'`,
+`'stopped'` (cancelled or stopped) or `'error'`.
+
+### Native storage
+
+A small key/value store kept by the app. It survives clearing the WebView's cookies and storage,
+but not uninstalling the app. It is shared by all trusted ed22.org pages.
+
+| Call | Returns |
+| --- | --- |
+| `kiosk.storage.get(key)` | The string, or `null` |
+| `kiosk.storage.set(key, value)` | `true`. `value` is converted to a string |
+| `kiosk.storage.remove(key)` | `true` |
+| `kiosk.storage.keys()` | Array of keys, sorted |
+
+Limits: keys are 1-128 characters, values up to 65,536 characters, and at most 500 keys. Calls
+over the limit reject with an error.
 
 ### Permissions, camera and microphone
 
@@ -214,13 +278,13 @@ and pause while the screen is off.
 | Call | Effect |
 | --- | --- |
 | `kiosk.vibrate(ms)` or `kiosk.vibrate([on, off, on, ...])` | Vibrate |
-| `kiosk.setBrightness(0.0-1.0)` | Screen brightness for the kiosk; `-1` returns to the system setting |
+| `kiosk.setBrightness(level)` | Kiosk screen brightness, `0.0`-`1.0` (values below 0.01 become 0.01); `-1` returns to the system setting |
 | `kiosk.getVolume()` / `kiosk.setVolume(0.0-1.0, stream)` | `stream` is `music` (default), `ring`, `alarm`, `notification`, `system` or `call` |
 | `kiosk.setKeepScreenOn(true/false)` | Keep the screen awake (on by default) |
 | `kiosk.setTorch(true/false)` | Flashlight |
 | `kiosk.setOrientation('portrait'/'landscape'/'auto')` | Lock or free screen rotation |
 | `kiosk.toast(text)` | Show a short Android message |
-| `kiosk.speak(text)` | Text to speech |
+| `kiosk.speak(text)` | Text to speech (see [Speech](#speech)) |
 | `kiosk.reload()` / `kiosk.goHome()` | Reload, or go back to the start page |
 | `kiosk.reboot()` | Restart the device (device owner only) |
 | `kiosk.call(method, args)` | Low-level access to any of the above by name |

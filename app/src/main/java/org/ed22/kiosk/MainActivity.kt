@@ -149,6 +149,7 @@ class MainActivity : AppCompatActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideSystemUi()
+        if (::bridge.isInitialized) bridge.onFocusChanged(hasFocus)
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {

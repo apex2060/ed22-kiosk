@@ -32,8 +32,7 @@ object DeviceInfo {
             BatteryManager.BATTERY_PLUGGED_AC -> "ac"
             BatteryManager.BATTERY_PLUGGED_USB -> "usb"
             BatteryManager.BATTERY_PLUGGED_WIRELESS -> "wireless"
-            0 -> "none"
-            else -> "other"
+            else -> null
         }
         val health = when (i.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)) {
             BatteryManager.BATTERY_HEALTH_GOOD -> "good"
@@ -44,10 +43,10 @@ object DeviceInfo {
             else -> "unknown"
         }
         return JSONObject()
-            .put("level", if (level >= 0 && scale > 0) level * 100 / scale else JSONObject.NULL)
+            .put("level", if (level >= 0 && scale > 0) (level * 100 / scale).coerceIn(0, 100) else 0)
             .put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL)
             .put("full", status == BatteryManager.BATTERY_STATUS_FULL)
-            .put("plugged", plugged)
+            .put("plugged", plugged ?: JSONObject.NULL)
             .put("health", health)
             .put("temperatureC", i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10.0)
             .put("voltageMv", i.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0))
@@ -56,18 +55,20 @@ object DeviceInfo {
     fun network(ctx: Context): JSONObject {
         val cm = ctx.getSystemService(ConnectivityManager::class.java)
         val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+        val connected = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        // A VPN reports its underlying transport too, so this also covers VPNs.
         val type = when {
-            caps == null -> "none"
+            caps == null || !connected -> "none"
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
             caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
-            else -> "other"
+            else -> "wifi" // Unknown transport that still has internet; treat it like Wi-Fi.
         }
         return JSONObject()
-            .put("online", caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
+            .put("connected", connected)
             .put("type", type)
             .put("metered", caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false)
+            .put("online", caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
             .put("downstreamKbps", caps?.linkDownstreamBandwidthKbps ?: 0)
             .put("upstreamKbps", caps?.linkUpstreamBandwidthKbps ?: 0)
     }
