@@ -22,6 +22,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -32,6 +33,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -50,6 +53,8 @@ class MainActivity : AppCompatActivity() {
 
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+    private var popup: WebView? = null
+    private var popupFrame: FrameLayout? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var lastVisit: String? = null
 
@@ -97,6 +102,7 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this) {
             when {
                 customView != null -> hideCustomView()
+                popup != null -> popup?.let { if (it.canGoBack()) it.goBack() else closePopup() }
                 webView.canGoBack() -> webView.goBack()
             }
         }
@@ -126,6 +132,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        closePopup()
         if (::webView.isInitialized) {
             bridge.destroy()
             root.removeView(webView)
@@ -190,7 +197,19 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView() {
-        with(webView.settings) {
+        applySettings(webView)
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(webView, true)
+        }
+        webView.webViewClient = KioskWebViewClient()
+        webView.webChromeClient = KioskChromeClient()
+    }
+
+    /** Settings shared by the main WebView and popup windows. */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun applySettings(view: WebView) {
+        with(view.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
@@ -199,17 +218,89 @@ class MainActivity : AppCompatActivity() {
             useWideViewPort = true
             builtInZoomControls = true
             displayZoomControls = false
+            // Popups (e.g. Firebase signInWithPopup) open in an in-app overlay; see onCreateWindow.
             javaScriptCanOpenWindowsAutomatically = true
-            setSupportMultipleWindows(false)
+            setSupportMultipleWindows(true)
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            userAgentString = "$userAgentString ED22Kiosk/${BuildConfig.VERSION_NAME}"
+            // Google refuses OAuth sign-in in WebViews it can detect ("disallowed_useragent"), so drop the
+            // WebView markers ("; wv" and "Version/4.0") from the user agent.
+            userAgentString = WebSettings.getDefaultUserAgent(this@MainActivity)
+                .replace("; wv)", ")")
+                .replace(Regex(" Version/[\\d.]+"), "") + " ED22Kiosk/${BuildConfig.VERSION_NAME}"
         }
-        CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-            setAcceptThirdPartyCookies(webView, true)
+        // Also stop sending the "X-Requested-With: org.ed22.kiosk" header, which reveals the app.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+            WebSettingsCompat.setRequestedWithHeaderOriginAllowList(view.settings, emptySet())
         }
-        webView.webViewClient = KioskWebViewClient()
-        webView.webChromeClient = KioskChromeClient()
+    }
+
+    /** Same rules for the main page and popups: web links stay in the app, everything else is blocked. */
+    private fun blockNavigation(view: WebView, uri: Uri): Boolean = when (uri.scheme?.lowercase()) {
+        "http", "https", "about", "data", "blob", "javascript" -> false
+        "intent" -> {
+            // Open the web fallback of an app link instead of leaving the kiosk.
+            val fallback = try {
+                Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).getStringExtra("browser_fallback_url")
+            } catch (e: Exception) {
+                null
+            }
+            if (fallback != null && fallback.startsWith("http")) view.loadUrl(fallback)
+            true
+        }
+        // tel:, mailto:, market:, file: and other links would leave the kiosk or read local files.
+        else -> true
+    }
+
+    /**
+     * Shows a page's window.open() popup full-screen over the kiosk. It is a real child window (so
+     * window.opener and postMessage work, which Firebase popup sign-in needs), with no kiosk bridge,
+     * no device permissions and no file picker. It closes on window.close(), Back, or the Close button.
+     */
+    private fun openPopup(resultMsg: android.os.Message): Boolean {
+        closePopup()
+        val child = WebView(this)
+        applySettings(child)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(child, true)
+        child.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
+                blockNavigation(view, request.url)
+        }
+        child.webChromeClient = object : WebChromeClient() {
+            override fun onCloseWindow(window: WebView) {
+                handler.post { if (popup === window) closePopup() }
+            }
+            override fun onPermissionRequest(request: PermissionRequest) = request.deny()
+            override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) =
+                callback.invoke(origin, false, false)
+        }
+        val frame = FrameLayout(this).apply { setBackgroundColor(android.graphics.Color.WHITE) }
+        frame.addView(child, FrameLayout.LayoutParams(MATCH, MATCH))
+        val close = android.widget.TextView(this).apply {
+            text = "✕"
+            textSize = 22f
+            setTextColor(android.graphics.Color.WHITE)
+            setBackgroundColor(0x99000000.toInt())
+            val pad = (12 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad / 2, pad, pad / 2)
+            setOnClickListener { closePopup() }
+        }
+        frame.addView(close, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.TOP or android.view.Gravity.END))
+        root.addView(frame, FrameLayout.LayoutParams(MATCH, MATCH))
+        popup = child
+        popupFrame = frame
+        (resultMsg.obj as WebView.WebViewTransport).webView = child
+        resultMsg.sendToTarget()
+        return true
+    }
+
+    private fun closePopup() {
+        val child = popup ?: return
+        popup = null
+        popupFrame?.let { root.removeView(it) }
+        popupFrame = null
+        child.stopLoading()
+        child.destroy()
+        hideSystemUi()
     }
 
     private fun onVisit(url: String) {
@@ -244,24 +335,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private inner class KioskWebViewClient : WebViewClient() {
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-            val uri = request.url
-            return when (uri.scheme?.lowercase()) {
-                "http", "https", "about", "data", "blob", "javascript" -> false
-                "intent" -> {
-                    // Open the web fallback of an app link instead of leaving the kiosk.
-                    val fallback = try {
-                        Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).getStringExtra("browser_fallback_url")
-                    } catch (e: Exception) {
-                        null
-                    }
-                    if (fallback != null && fallback.startsWith("http")) view.loadUrl(fallback)
-                    true
-                }
-                // tel:, mailto:, market:, file: and other links would leave the kiosk or read local files.
-                else -> true
-            }
-        }
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+            blockNavigation(view, request.url)
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             bridge.onNavigation(view, url)
@@ -322,6 +397,9 @@ class MainActivity : AppCompatActivity() {
                 callback.invoke(origin, granted.values.any { it }, false)
             }
         }
+
+        override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message) =
+            openPopup(resultMsg)
 
         override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) = showCustomView(view, callback)
 
