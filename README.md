@@ -22,6 +22,36 @@ The app works best as **device owner**, which is what blocks the home button, re
 the notification shade, safe mode and factory reset. Android only allows a device owner to
 be set on a device with **no accounts on it**, so start from a fresh or factory-reset device.
 
+### Option A: QR code (recommended, no computer)
+
+1. **Factory reset** the device (or start from a new one).
+2. On the first **Welcome** screen, **tap the same spot 6 times**. A QR scanner opens. On
+   Android 8 it first asks for Wi-Fi so it can download a QR reader.
+3. **Connect to Wi-Fi** if asked. The QR code contains no Wi-Fi details.
+4. **Scan the setup QR code** (`ed22-kiosk-setup.png`). The device downloads the latest
+   ED22 Kiosk from GitHub Releases, checks its signing certificate, and makes it **device owner**.
+   Accept the prompts. There is no Google account step.
+5. When setup ends, ED22 Kiosk opens. **Set the parent PIN**, and the device locks into the kiosk.
+
+The setup QR code holds this JSON (regenerate the PNG with any QR tool if it changes):
+
+```json
+{
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "org.ed22.kiosk/org.ed22.kiosk.KioskAdminReceiver",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://github.com/apex2060/ed22-kiosk/releases/latest/download/ed22-kiosk.apk",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": "ILFyjcgmHcFg9CHLTyLMxhj1B2ibjEVc39h9gBUuxUk",
+  "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
+  "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": true
+}
+```
+
+It uses the signing **certificate** checksum and the release's fixed-name `ed22-kiosk.apk`
+asset, so the same QR code keeps working for every future build signed with the same key.
+If the device was already set up (it has an account or has finished setup), tapping 6 times
+does nothing: factory reset it first.
+
+### Option B: adb
+
 1. **Factory reset** the device (or start from a new one). During setup, connect to Wi-Fi
    but **skip signing in to a Google account**.
 2. Turn on **Developer options** (Settings › About › tap *Build number* 7 times), then turn on

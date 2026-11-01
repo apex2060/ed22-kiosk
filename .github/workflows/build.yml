@@ -82,6 +82,9 @@ jobs:
           name: ED22 Kiosk ${{ env.KIOSK_VERSION_NAME }}
           target_commitish: ${{ github.sha }}
           make_latest: 'true'
+          # ed22-kiosk.apk is a fixed name, so releases/latest/download/ed22-kiosk.apk always works
+          # (used by the setup QR code).
           files: |
+            ed22-kiosk.apk
             public/ed22-kiosk-${{ env.KIOSK_VERSION_CODE }}.apk
             public/update.json
