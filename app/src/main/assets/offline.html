@@ -20,8 +20,8 @@
   <button id="retry">Try again</button>
 </div>
 <script>
-  var target = decodeURIComponent(location.hash.slice(1)) || 'https://us.ed22.org/me';
-  if (!/^https?:\/\//.test(target)) target = 'https://us.ed22.org/me';
+  var target = decodeURIComponent(location.hash.slice(1)) || 'https://us.ed22.org/roam';
+  if (!/^https?:\/\//.test(target)) target = 'https://us.ed22.org/roam';
   function retry() { location.replace(target); }
   document.getElementById('retry').onclick = retry;
   window.addEventListener('online', retry);
