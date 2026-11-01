@@ -1,7 +1,7 @@
 # ED22 Kiosk
 
 An Android kiosk app that locks a device to a full-screen browser starting at
-**https://us.ed22.org/roam**. It gives ed22.org pages a `window.kiosk` JavaScript API for
+**https://us.ed22.org/mobile**. It gives ed22.org pages a `window.kiosk` JavaScript API for
 system information and device features, can report every page visit to
 **https://us.ed22.org/me/history** (currently turned off), and hides a PIN-protected parent menu behind
 **4 quick taps in the bottom-left corner**.
@@ -68,7 +68,7 @@ does nothing: factory reset it first.
    It should print `Success: Device owner set to package org.ed22.kiosk`. If it says there are
    already accounts or users on the device, remove them (or factory reset) and try again.
 5. Open **ED22 Kiosk**. Set the parent PIN (4 to 8 digits). The device locks into the kiosk
-   and opens https://us.ed22.org/roam.
+   and opens https://us.ed22.org/mobile.
 6. (Optional) Leave USB debugging on so you can push updates with adb later. Kids can't reach
    Settings from the kiosk, so it is safe to keep.
 
@@ -100,7 +100,7 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 | --- | --- |
 | Exit kiosk mode | Unlocks the device and goes to the normal home screen. Opening ED22 Kiosk again, or restarting, locks it again. |
 | Open Wi-Fi settings | Exits kiosk mode and opens Wi-Fi settings. |
-| Reload start page | Goes back to https://us.ed22.org/roam. |
+| Reload start page | Goes back to https://us.ed22.org/mobile. |
 | Change PIN | Sets a new parent PIN. |
 | Updates | Shows the installed version, the last update check and its result, with a **Check for updates now** button. |
 | Remove kiosk lock | Removes device-owner status so the app can be uninstalled. Locking again needs a factory reset. |

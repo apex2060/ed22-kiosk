@@ -4,7 +4,7 @@ import android.net.Uri
 
 object KioskConfig {
     /** The page the kiosk opens on boot and returns to from the parent menu. */
-    const val START_URL = "https://us.ed22.org/roam"
+    const val START_URL = "https://us.ed22.org/mobile"
 
     /** Every top-level page visit is POSTed here as JSON. */
     const val HISTORY_URL = "https://us.ed22.org/me/history"
