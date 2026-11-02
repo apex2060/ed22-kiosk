@@ -295,7 +295,7 @@ and pause while the screen is off.
 | `kiosk.setAuth({token, deviceDocId})` | Signs the app in to Firebase with a custom token and starts listening to the device doc. Resolves `{uid, deviceDocId}`; rejects if `token` is missing or sign-in fails (see [Device account and policy](#device-account-and-policy)) |
 | `kiosk.getAuth()` | `{signedIn, uid, deviceDocId, policy}` (`policy` is the cached policy, `{}` if none) |
 | `kiosk.signOut()` | Signs out, stops the listener, and clears the device doc id and cached policy |
-| `kiosk.apps.list()` | `[{package, label, allowed, until}]` for launchable installed apps except Little Explorer. `until` is epoch ms or `null` |
+| `kiosk.apps.list()` | `[{package, label, allowed, until, icon}]` for launchable installed apps except Little Explorer. `until` is epoch ms or `null`. `icon` is the launcher icon as a 96x96 PNG data URL (`data:image/png;base64,...`), or `null` if it could not be rendered (cached per package + versionCode) |
 | `kiosk.apps.launch(package)` | Opens the app; rejects unless the policy allows it right now |
 
 Calling kiosk.apps.list() hides the native Apps button for that page (the page is expected to show its own).
@@ -317,8 +317,8 @@ The app signs in natively (the session survives restarts), saves `deviceDocId`, 
 works with `share/library/myItems/<deviceDocId>` (type `explorerDevices`, created by /mobile, never
 by the app) from the Application, so it keeps working while /mobile isn't loaded.
 
-**Written by the app:** only the `status` field, with `update()` (never `set()`), when signing in,
-at app start and every 15 minutes (WorkManager, when online):
+**Written by the app:** only fields inside `status`, with `update()` and dotted paths (never `set()`),
+when signing in, at app start and every 15 minutes (WorkManager, when online):
 
 ```js
 status: {
@@ -329,9 +329,14 @@ status: {
   deviceId,                 // same as kiosk.deviceId
   deviceOwner: true,
   policyNote: '',           // e.g. 'Allowed apps not enforced: app is not device owner'
-  installedApps: [{package, label}]   // launchable apps, excluding Little Explorer
+  installedApps: [{package, label, icon}]   // launchable apps, excluding Little Explorer
 }
 ```
+
+`installedApps[].icon` is a 48x48 PNG data URL (`data:image/png;base64,...`, about 2-7 KB each) or
+`null`. To keep writes small, `status.installedApps` is rewritten only when installed apps change
+(packages, versionCodes or labels, compared with a hash of the last successful write); the other
+`status` fields are updated every time without touching it.
 
 **Read by the app:** the `policy` field, through a snapshot listener. The last policy is cached on
 the device, so it still applies offline and after a reboot. Listener errors (such as

@@ -145,7 +145,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Installed, launchable apps the policy allows right now (same rules as DeviceSync.launch). */
     private fun allowedLaunchable(): List<LaunchableApp> {
-        val list = DeviceSync.appList(this)
+        val list = DeviceSync.appList(this, withIcons = false)
         return (0 until list.length()).mapNotNull { i ->
             val o = list.optJSONObject(i) ?: return@mapNotNull null
             val pkg = o.optString("package")

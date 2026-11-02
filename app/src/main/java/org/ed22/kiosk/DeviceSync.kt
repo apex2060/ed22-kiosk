@@ -5,10 +5,15 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ResolveInfo
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import android.util.Log
+import androidx.core.content.pm.PackageInfoCompat
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -25,8 +30,11 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.text.DateFormat
 import java.util.Date
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
@@ -41,6 +49,10 @@ object DeviceSync {
     private const val KEY_DOC = "deviceDocId"
     private const val KEY_POLICY = "policy"
     private const val KEY_COMMAND = "lastCommandId"
+    /** Hash of the installedApps last written to the device doc (packages + versionCodes + labels). */
+    private const val KEY_APPS_HASH = "installedAppsHash"
+    const val ICON_PX_LIST = 96
+    const val ICON_PX_STATUS = 48
     private const val STATUS_WORK = "kiosk-status-periodic"
     private const val RETRY_MS = 5 * 60_000L
 
@@ -93,7 +105,9 @@ object DeviceSync {
     fun setAuth(token: String, docId: String?, done: (Result<JSONObject>) -> Unit) {
         auth.signInWithCustomToken(token)
             .addOnSuccessListener {
-                if (!docId.isNullOrBlank()) prefs(app).edit().putString(KEY_DOC, docId).apply()
+                if (!docId.isNullOrBlank() && docId != deviceDocId()) {
+                    prefs(app).edit().putString(KEY_DOC, docId).remove(KEY_APPS_HASH).apply()
+                }
                 startListener()
                 reportStatus(app)
                 done(Result.success(JSONObject().put("uid", uid()).put("deviceDocId", deviceDocId() ?: JSONObject.NULL)))
@@ -107,7 +121,7 @@ object DeviceSync {
     fun signOut() {
         stopListener()
         auth.signOut()
-        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).apply()
+        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_APPS_HASH).apply()
         listenerStatus = "Not signed in"
         onPolicy(JSONObject())
     }
@@ -237,28 +251,69 @@ object DeviceSync {
         }
     }
 
-    /** Launchable apps other than this one, with their policy state. */
-    fun appList(ctx: Context): JSONArray {
+    /**
+     * Launchable apps other than this one, with their policy state and (unless [withIcons] is false)
+     * `icon`: a 96 px PNG data URL, or null.
+     */
+    fun appList(ctx: Context, withIcons: Boolean = true): JSONArray {
         val entries = allowedEntries(policy(ctx))
         val allowed = allowedPackages(ctx)
         val out = JSONArray()
-        installedApps(ctx).forEach { (pkg, label) ->
-            out.put(
-                JSONObject().put("package", pkg).put("label", label).put("allowed", pkg in allowed)
-                    .put("until", entries[pkg] ?: JSONObject.NULL)
-            )
+        launcherApps(ctx).forEach { app ->
+            val o = JSONObject().put("package", app.pkg).put("label", app.label).put("allowed", app.pkg in allowed)
+                .put("until", entries[app.pkg] ?: JSONObject.NULL)
+            if (withIcons) o.put("icon", iconDataUrl(ctx, app, ICON_PX_LIST) ?: JSONObject.NULL)
+            out.put(o)
         }
         return out
     }
 
-    fun installedApps(ctx: Context): List<Pair<String, String>> {
+    fun installedApps(ctx: Context): List<Pair<String, String>> = launcherApps(ctx).map { it.pkg to it.label }
+
+    class LauncherApp(val pkg: String, val label: String, val versionCode: Long, val info: ResolveInfo)
+
+    private fun launcherApps(ctx: Context): List<LauncherApp> {
         val pm = ctx.packageManager
         val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         return pm.queryIntentActivities(launcher, 0)
-            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
-            .filter { it.first != ctx.packageName }
-            .distinctBy { it.first }
-            .sortedBy { it.second.lowercase() }
+            .filter { it.activityInfo.packageName != ctx.packageName }
+            .distinctBy { it.activityInfo.packageName }
+            .map { ri ->
+                val pkg = ri.activityInfo.packageName
+                val vc = runCatching { PackageInfoCompat.getLongVersionCode(pm.getPackageInfo(pkg, 0)) }.getOrDefault(-1L)
+                LauncherApp(pkg, ri.loadLabel(pm).toString(), vc, ri)
+            }
+            .sortedBy { it.label.lowercase() }
+    }
+
+    // --- icons ---
+
+    /** "pkg:versionCode:px" -> data URL, or "" when rendering failed. */
+    private val iconCache = ConcurrentHashMap<String, String>()
+
+    /** The app's launcher icon (adaptive icons included) as a [px]x[px] PNG data URL; null on failure. */
+    fun iconDataUrl(ctx: Context, app: LauncherApp, px: Int): String? {
+        val key = "${app.pkg}:${app.versionCode}:$px"
+        iconCache[key]?.let { return it.ifEmpty { null } }
+        val url = try {
+            val drawable = app.info.loadIcon(ctx.packageManager)
+            val bmp = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+            drawable.setBounds(0, 0, px, px)
+            drawable.draw(Canvas(bmp))
+            val bytes = ByteArrayOutputStream().use { out ->
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                out.toByteArray()
+            }
+            bmp.recycle()
+            "data:image/png;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Icon for ${app.pkg} failed", e)
+            null
+        }
+        // Drop entries for older versions of this package at this size.
+        iconCache.keys.removeAll { it.startsWith("${app.pkg}:") && it.endsWith(":$px") && it != key }
+        iconCache[key] = url ?: ""
+        return url
     }
 
     fun launch(ctx: Context, pkg: String) {
@@ -270,7 +325,8 @@ object DeviceSync {
 
     // --- status ---
 
-    fun statusMap(ctx: Context): Map<String, Any?> {
+    /** Status fields other than installedApps (always written). */
+    fun statusMap(ctx: Context): Map<String, Any> {
         val battery = DeviceInfo.battery(ctx)
         return mapOf(
             "lastSeen" to FieldValue.serverTimestamp(),
@@ -284,17 +340,46 @@ object DeviceSync {
             "deviceId" to Prefs.deviceId(ctx),
             "deviceOwner" to KioskPolicy.isDeviceOwner(ctx),
             "policyNote" to enforcementNote,
-            "installedApps" to installedApps(ctx).map { (pkg, label) -> mapOf("package" to pkg, "label" to label) },
         )
     }
 
-    /** Writes `status` with update(), so no other field of the doc is touched. Returns null when signed out. */
-    fun reportStatus(ctx: Context) =
-        if (auth.currentUser == null) null
-        else deviceDocId(ctx)?.let { id ->
-            doc(id).update("status", statusMap(ctx))
-                .addOnFailureListener { e -> Log.w(TAG, "Status update failed", e) }
+    private fun appsHash(apps: List<LauncherApp>): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        apps.sortedBy { it.pkg }.forEach { md.update("${it.pkg}\u0000${it.versionCode}\u0000${it.label}\n".toByteArray()) }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * Writes `status.*` with update() and dotted paths, so no other field of the doc (or of `status`) is
+     * touched. `status.installedApps` (with 48 px icons) is only included when the app list changed
+     * since the last successful write. Returns null when signed out.
+     */
+    fun reportStatus(ctx: Context): com.google.android.gms.tasks.Task<Void>? {
+        if (auth.currentUser == null) return null
+        val id = deviceDocId(ctx) ?: return null
+        val fields = HashMap<String, Any>()
+        statusMap(ctx).forEach { (k, v) -> fields["status.$k"] = v }
+        val apps = launcherApps(ctx)
+        val hash = appsHash(apps)
+        val p = prefs(ctx)
+        val sendApps = p.getString(KEY_APPS_HASH, null) != hash
+        if (sendApps) {
+            var bytes = 0
+            fields["status.installedApps"] = apps.map { app ->
+                val icon = iconDataUrl(ctx, app, ICON_PX_STATUS)
+                bytes += app.pkg.length + app.label.length + (icon?.length ?: 0)
+                mapOf("package" to app.pkg, "label" to app.label, "icon" to icon)
+            }
+            Log.i(TAG, "Writing status.installedApps: ${apps.size} apps, ~${bytes / 1024} KB")
+            if (bytes > 512 * 1024) Log.w(TAG, "status.installedApps is large (~${bytes / 1024} KB); Firestore docs max out at 1 MiB")
         }
+        return doc(id).update(fields)
+            .addOnSuccessListener {
+                // Only remember the hash once the server has it, and only for the doc it was written to.
+                if (sendApps && deviceDocId(ctx) == id) p.edit().putString(KEY_APPS_HASH, hash).apply()
+            }
+            .addOnFailureListener { e -> Log.w(TAG, "Status update failed", e) }
+    }
 
     private fun toJson(v: Any?): Any = when (v) {
         null -> JSONObject.NULL
