@@ -178,11 +178,21 @@ class MainActivity : AppCompatActivity() {
         refreshAppsButton()
     }
 
+    /** True once the current main-WebView page called kiosk.apps.list() (it draws its own apps UI). */
+    private var pageHasAppsUi = false
+
+    fun setPageHasAppsUi(value: Boolean) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { handler.post { setPageHasAppsUi(value) }; return }
+        if (pageHasAppsUi == value) return
+        pageHasAppsUi = value
+        refreshAppsButton()
+    }
+
     fun refreshAppsButton() {
         if (!::root.isInitialized) return
         if (Looper.myLooper() != Looper.getMainLooper()) { handler.post { refreshAppsButton() }; return }
         val btn = appsButton ?: return
-        btn.visibility = if (runCatching { allowedLaunchable() }.getOrDefault(emptyList()).isNotEmpty()) View.VISIBLE else View.GONE
+        btn.visibility = if (!pageHasAppsUi && runCatching { allowedLaunchable() }.getOrDefault(emptyList()).isNotEmpty()) View.VISIBLE else View.GONE
         btn.bringToFront()
     }
 
@@ -481,6 +491,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             bridge.onNavigation(view, url)
+            if (view === webView) setPageHasAppsUi(false)
         }
 
         override fun onPageFinished(view: WebView, url: String) {

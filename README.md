@@ -297,6 +297,8 @@ and pause while the screen is off.
 | `kiosk.signOut()` | Signs out, stops the listener, and clears the device doc id and cached policy |
 | `kiosk.apps.list()` | `[{package, label, allowed, until}]` for launchable installed apps except Little Explorer. `until` is epoch ms or `null` |
 | `kiosk.apps.launch(package)` | Opens the app; rejects unless the policy allows it right now |
+
+Calling kiosk.apps.list() hides the native Apps button for that page (the page is expected to show its own).
 | `kiosk.call(method, args)` | Low-level access to any of the above by name |
 
 [`docs/kiosk-test.html`](docs/kiosk-test.html) exercises every call. Host it anywhere on

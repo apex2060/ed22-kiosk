@@ -167,6 +167,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
             return
         }
         if (isMainFrame) mainFrame = replyProxy
+        if (isMainFrame && view === activity.webView && msg.optString("method") == "appsList") activity.setPageHasAppsUi(true)
         val call = Call(msg.optInt("id", -1), replyProxy)
         val args = msg.optJSONObject("args") ?: JSONObject()
         try {
