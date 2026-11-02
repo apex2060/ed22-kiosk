@@ -3,6 +3,8 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    // Needs app/google-services.json (git-ignored; CI writes it from GOOGLE_SERVICES_JSON_BASE64).
+    id("com.google.gms.google-services")
 }
 
 // Release signing comes from keystore.properties (local) or KIOSK_* env vars (CI).
@@ -63,4 +65,7 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.webkit:webkit:1.12.1")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-auth-ktx")
+    implementation("com.google.firebase:firebase-firestore-ktx")
 }

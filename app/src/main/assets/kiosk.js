@@ -57,7 +57,7 @@
     /** Low-level access to any native method: kiosk.call('getBattery'). */
     call: call,
 
-    /** Subscribe to pushed events: 'battery', 'network', 'nfc', 'speech', 'focus', 'screen'. */
+    /** Subscribe to pushed events: 'battery', 'network', 'nfc', 'speech', 'focus', 'screen', 'policy'. */
     on: function (event, fn) { (listeners[event] = listeners[event] || []).push(fn); },
     off: function (event, fn) {
       var list = listeners[event];
@@ -112,6 +112,21 @@
         delete sensorCallbacks[watchId];
         return call('sensorClear', { watchId: watchId });
       }
+    },
+
+    // Device account: link this device to its Firestore doc with a Firebase custom token
+    setAuth: function (opts) {
+      opts = opts || {};
+      if (!opts.token) return Promise.reject(new Error('token is required'));
+      return call('setAuth', { token: String(opts.token), deviceDocId: opts.deviceDocId == null ? null : String(opts.deviceDocId) });
+    },
+    getAuth: method('getAuth'),
+    signOut: method('signOut'),
+
+    // Other installed apps, and launching the ones the device doc's policy allows
+    apps: {
+      list: method('appsList'),
+      launch: function (pkg) { return call('appsLaunch', { package: String(pkg) }); }
     },
 
     // Device controls

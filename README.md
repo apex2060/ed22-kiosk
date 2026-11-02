@@ -12,6 +12,7 @@ system information and device features, can report every page visit to
 - [The parent menu](#the-parent-menu)
 - [Browsing and history reporting](#browsing-and-history-reporting)
 - [The `kiosk.*` JavaScript API](#the-kiosk-javascript-api)
+- [Device account and policy](#device-account-and-policy)
 - [Automatic updates](#automatic-updates)
 - [Building](#building)
 - [Configuration](#configuration)
@@ -103,6 +104,7 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 | Reload start page | Goes back to https://us.ed22.org/mobile. |
 | Change PIN | Sets a new parent PIN. |
 | Updates | Shows the installed version, the last update check and its result, with a **Check for updates now** button. |
+| Account | Shows the signed-in Firebase uid, the device doc id, the listener status (including errors such as `PERMISSION_DENIED`) and the apps allowed right now, with a **Sign out** button. |
 | Remove kiosk lock | Removes device-owner status so the app can be uninstalled. Locking again needs a factory reset. |
 
 Five wrong PINs in a row lock the prompt for 60 seconds.
@@ -184,6 +186,7 @@ kiosk.on('focus', e => ...);     // {focused: bool} when the kiosk window gains 
 kiosk.on('screen', e => ...);    // {on: bool} when the screen turns on or off
 kiosk.on('nfc', tag => ...);     // a tag was scanned (see NFC)
 kiosk.on('speech', e => ...);    // text-to-speech progress (see Speech)
+kiosk.on('policy', p => ...);    // the device doc's policy changed (see Device account and policy)
 kiosk.off('battery', handler);
 ```
 
@@ -287,10 +290,74 @@ and pause while the screen is off.
 | `kiosk.speak(text)` | Text to speech (see [Speech](#speech)) |
 | `kiosk.reload()` / `kiosk.goHome()` | Reload, or go back to the start page |
 | `kiosk.reboot()` | Restart the device (device owner only) |
+| `kiosk.setAuth({token, deviceDocId})` | Signs the app in to Firebase with a custom token and starts listening to the device doc. Resolves `{uid, deviceDocId}`; rejects if `token` is missing or sign-in fails (see [Device account and policy](#device-account-and-policy)) |
+| `kiosk.getAuth()` | `{signedIn, uid, deviceDocId, policy}` (`policy` is the cached policy, `{}` if none) |
+| `kiosk.signOut()` | Signs out, stops the listener, and clears the device doc id and cached policy |
+| `kiosk.apps.list()` | `[{package, label, allowed, until}]` for launchable installed apps except Little Explorer. `until` is epoch ms or `null` |
+| `kiosk.apps.launch(package)` | Opens the app; rejects unless the policy allows it right now |
 | `kiosk.call(method, args)` | Low-level access to any of the above by name |
 
 [`docs/kiosk-test.html`](docs/kiosk-test.html) exercises every call. Host it anywhere on
 ed22.org and open it in the kiosk.
+
+## Device account and policy
+
+Once a parent signs in on https://us.ed22.org/mobile, the page creates the device's Firestore doc
+(Firebase project `homeschool-express`) and hands the app a Firebase **custom token**:
+
+```js
+const {uid, deviceDocId} = await kiosk.setAuth({token, deviceDocId});
+```
+
+The app signs in natively (the session survives restarts), saves `deviceDocId`, and from then on
+works with `share/library/myItems/<deviceDocId>` (type `explorerDevices`, created by /mobile, never
+by the app) from the Application, so it keeps working while /mobile isn't loaded.
+
+**Written by the app:** only the `status` field, with `update()` (never `set()`), when signing in,
+at app start and every 15 minutes (WorkManager, when online):
+
+```js
+status: {
+  lastSeen: serverTimestamp, version: '0.1.142', versionCode: 142,
+  model, manufacturer, androidVersion,
+  battery: 0.87,            // 0-1
+  charging: true,
+  deviceId,                 // same as kiosk.deviceId
+  deviceOwner: true,
+  policyNote: '',           // e.g. 'Allowed apps not enforced: app is not device owner'
+  installedApps: [{package, label}]   // launchable apps, excluding Little Explorer
+}
+```
+
+**Read by the app:** the `policy` field, through a snapshot listener. The last policy is cached on
+the device, so it still applies offline and after a reboot. Listener errors (such as
+`PERMISSION_DENIED`) are logged (`adb logcat -s DeviceSync`), shown in Parent menu › Account, and
+retried every 5 minutes.
+
+```js
+policy: {
+  allowedApps: [{package: 'com.example.app', until: Timestamp | null}],  // null = no end time
+  locked: false,
+  command: {id: 'c-123', type: 'reload' | 'goHome' | 'reboot'}
+}
+```
+
+- **`allowedApps`**: as device owner, the lock task allowlist becomes Little Explorer + the file
+  picker + every app whose `until` is null or in the future, so those apps can be opened (see
+  `kiosk.apps.launch`) without leaving kiosk mode. An alarm fires at the soonest `until` to
+  recompute it, and if an app stops being allowed while the kiosk isn't in front, the kiosk is
+  brought back to the front. Apps are never hidden or uninstalled. Without device owner, nothing
+  is enforced and `status.policyNote` says so.
+- **`locked: true`**: covers the page with a full-screen "This device is locked" screen. The
+  parent-menu corner taps and PIN still work.
+- **`command`**: runs once per `id` (the last handled id is remembered on the device, including
+  across sign-outs). `reboot` needs device owner. Note: a command that is already in the doc when
+  a device first signs in runs once.
+- In the page, `kiosk.on('policy', fn)` gets the new policy on each change (`until` as epoch ms),
+  and `kiosk.getAuth()` includes the cached one.
+
+**Firestore rules** must let the signed-in custom-token uid read the doc and update its `status`
+field (for example, that uid is in the doc's `_writeIds` / `_readIds`).
 
 ## Automatic updates
 
@@ -343,6 +410,7 @@ these repository secrets (Settings › Secrets and variables › Actions):
 | `KIOSK_KEYSTORE_PASSWORD` | keystore password |
 | `KIOSK_KEY_ALIAS` | key alias |
 | `KIOSK_KEY_PASSWORD` | key password |
+| `GOOGLE_SERVICES_JSON_BASE64` | `base64 -w0 google-services.json` (Firebase config for `org.ed22.kiosk` in project `homeschool-express`) |
 
 To build locally with Android Studio or the Android SDK, put the same values in a
 `keystore.properties` file at the repository root (it is git-ignored):
@@ -354,7 +422,8 @@ keyAlias=...
 keyPassword=...
 ```
 
-then run `./gradlew assembleRelease`. Without a signing key the release build falls back to the
+and copy the Firebase config to `app/google-services.json` (also git-ignored; the build fails
+without it), then run `./gradlew assembleRelease`. Without a signing key the release build falls back to the
 debug key.
 
 ## Configuration

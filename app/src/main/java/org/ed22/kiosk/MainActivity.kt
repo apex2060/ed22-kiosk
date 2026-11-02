@@ -42,6 +42,12 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
         )
+
+        /** The live kiosk activity, if any (used by device-doc commands). */
+        var current: MainActivity? = null
+            private set
+        var inForeground = false
+            private set
     }
 
     lateinit var webView: WebView
@@ -50,6 +56,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var bridge: KioskBridge
     private lateinit var cornerTaps: CornerTapDetector
     private val handler = Handler(Looper.getMainLooper())
+    private var lockOverlay: View? = null
+    private val policyListener: (org.json.JSONObject) -> Unit = { updateLockOverlay() }
 
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
@@ -91,6 +99,9 @@ class MainActivity : AppCompatActivity() {
         setContentView(root)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUi()
+        current = this
+        DeviceSync.addListener(policyListener)
+        updateLockOverlay()
 
         cornerTaps = CornerTapDetector(KioskConfig.CORNER_SIZE_DP * resources.displayMetrics.density) {
             ParentMenu.prompt(this)
@@ -117,6 +128,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (!::webView.isInitialized) return
+        inForeground = true
         hideSystemUi()
         KioskPolicy.startLockTask(this)
         webView.onResume()
@@ -124,6 +136,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        inForeground = false
         if (::webView.isInitialized) {
             webView.onPause()
             bridge.onPause()
@@ -132,6 +145,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (current === this) current = null
+        DeviceSync.removeListener(policyListener)
         closePopup()
         if (::webView.isInitialized) {
             bridge.destroy()
@@ -166,6 +181,34 @@ class MainActivity : AppCompatActivity() {
             hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
+    }
+
+    /**
+     * Full-screen "locked" cover while the device doc's policy.locked is true. It swallows touches, but
+     * the parent-menu corner taps are seen first in [dispatchTouchEvent], so the PIN still works.
+     */
+    fun updateLockOverlay() {
+        if (!::root.isInitialized) return
+        val locked = DeviceSync.policy(this).optBoolean("locked", false)
+        if (!locked) {
+            lockOverlay?.let { root.removeView(it) }
+            lockOverlay = null
+            return
+        }
+        val overlay = lockOverlay ?: android.widget.TextView(this).apply {
+            text = "This device is locked"
+            textSize = 28f
+            gravity = android.view.Gravity.CENTER
+            setTextColor(android.graphics.Color.WHITE)
+            setBackgroundColor(0xFF1F2A44.toInt())
+            isClickable = true
+            isFocusable = true
+            setOnTouchListener { _, _ -> true }
+        }.also {
+            root.addView(it, FrameLayout.LayoutParams(MATCH, MATCH))
+            lockOverlay = it
+        }
+        overlay.bringToFront()
     }
 
     fun goHome() {
@@ -287,6 +330,7 @@ class MainActivity : AppCompatActivity() {
         }
         frame.addView(close, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.TOP or android.view.Gravity.END))
         root.addView(frame, FrameLayout.LayoutParams(MATCH, MATCH))
+        lockOverlay?.bringToFront()
         popup = child
         popupFrame = frame
         (resultMsg.obj as WebView.WebViewTransport).webView = child
@@ -324,6 +368,7 @@ class MainActivity : AppCompatActivity() {
         customView = view
         customViewCallback = callback
         root.addView(view, FrameLayout.LayoutParams(MATCH, MATCH))
+        lockOverlay?.bringToFront()
         webView.visibility = View.GONE
     }
 

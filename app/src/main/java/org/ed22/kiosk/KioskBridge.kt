@@ -79,6 +79,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
     private val nfc = NfcReader(activity) { tag -> handler.post { emit("nfc", tag) } }
     private var lastBattery: String? = null
     private var lastNetwork: String? = null
+    private val policyListener: (JSONObject) -> Unit = { policy -> emit("policy", policy) }
 
     private inner class Call(val id: Int, val proxy: JavaScriptReplyProxy) {
         fun ok(result: Any? = true) =
@@ -111,6 +112,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
             },
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
+        DeviceSync.addListener(policyListener)
     }
 
     fun onNavigation(webView: WebView, url: String) {
@@ -134,6 +136,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
     fun onFocusChanged(focused: Boolean) = emit("focus", JSONObject().put("focused", focused))
 
     fun destroy() {
+        DeviceSync.removeListener(policyListener)
         sensors.clearAll()
         try {
             activity.unregisterReceiver(batteryReceiver)
@@ -233,6 +236,24 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
             "sensorWatch" -> sensorWatch(args, call)
             "sensorClear" -> {
                 sensors.clear(args.optInt("watchId"))
+                call.ok()
+            }
+            "setAuth" -> {
+                val token = args.optString("token")
+                if (token.isBlank()) throw IllegalArgumentException("token is required")
+                val docId = args.optString("deviceDocId").takeIf { it.isNotBlank() && !args.isNull("deviceDocId") }
+                DeviceSync.setAuth(token, docId) { r ->
+                    r.fold({ call.ok(it) }, { e -> call.fail(e.message ?: "Sign-in failed") })
+                }
+            }
+            "getAuth" -> call.ok(DeviceSync.authInfo().put("policy", DeviceSync.policy(activity)))
+            "signOut" -> {
+                DeviceSync.signOut()
+                call.ok()
+            }
+            "appsList" -> call.ok(DeviceSync.appList(activity))
+            "appsLaunch" -> {
+                DeviceSync.launch(activity, args.optString("package"))
                 call.ok()
             }
             else -> call.fail("Unknown kiosk method: $method")

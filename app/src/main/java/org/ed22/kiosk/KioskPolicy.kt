@@ -54,9 +54,7 @@ object KioskPolicy {
         if (!isDeviceOwner(ctx)) return
         val dpm = dpm(ctx)
         val admin = admin(ctx)
-        safely("lock task packages") {
-            dpm.setLockTaskPackages(admin, (listOf(ctx.packageName) + LOCK_TASK_EXTRAS).toTypedArray())
-        }
+        setLockTaskPackages(ctx, DeviceSync.allowedPackages(ctx))
         if (Build.VERSION.SDK_INT >= 28) {
             // Keep the power menu so the device can still be restarted or turned off.
             safely("lock task features") {
@@ -79,6 +77,15 @@ object KioskPolicy {
             dpm.setGlobalSetting(admin, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, all.toString())
         }
         AUTO_GRANT.forEach { grantPermission(ctx, it) }
+    }
+
+    /** Lock task allowlist: this app, [LOCK_TASK_EXTRAS] and the apps the device doc currently allows. */
+    fun setLockTaskPackages(ctx: Context, allowed: Collection<String>) {
+        if (!isDeviceOwner(ctx)) return
+        safely("lock task packages") {
+            val packages = (listOf(ctx.packageName) + LOCK_TASK_EXTRAS + allowed).distinct()
+            dpm(ctx).setLockTaskPackages(admin(ctx), packages.toTypedArray())
+        }
     }
 
     fun startLockTask(activity: Activity) {

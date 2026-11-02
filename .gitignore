@@ -14,3 +14,6 @@ signing/
 *.pem
 *.b64
 .kotlin/
+
+# Firebase config (CI writes it from the GOOGLE_SERVICES_JSON_BASE64 secret)
+app/google-services.json

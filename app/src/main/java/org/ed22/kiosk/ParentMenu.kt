@@ -68,6 +68,7 @@ object ParentMenu {
             "Reload start page",
             "Change PIN",
             "Updates (${BuildConfig.VERSION_NAME})",
+            "Account",
             "Remove kiosk lock (allow uninstall)",
         )
         AlertDialog.Builder(activity)
@@ -81,7 +82,8 @@ object ParentMenu {
                         Intent(activity, PinSetupActivity::class.java).putExtra(PinSetupActivity.EXTRA_CHANGE, true)
                     )
                     4 -> showUpdates(activity)
-                    5 -> confirmRemove(activity)
+                    5 -> showAccount(activity)
+                    6 -> confirmRemove(activity)
                 }
             }
             .setNegativeButton("Close", null)
@@ -100,6 +102,27 @@ object ParentMenu {
             .setNegativeButton("Close", null)
             .setOnDismissListener { activity.hideSystemUi() }
             .show()
+    }
+
+    private fun showAccount(activity: MainActivity) {
+        val note = DeviceSync.enforcementNote
+        val message = "Signed in: ${DeviceSync.uid() ?: "no"}\n" +
+            "Device doc: ${DeviceSync.deviceDocId(activity) ?: "—"}\n" +
+            "Listener: ${DeviceSync.listenerStatus}\n" +
+            "Allowed apps now: ${DeviceSync.allowedPackages(activity).joinToString().ifEmpty { "none" }}" +
+            (if (note.isNotEmpty()) "\n$note" else "")
+        val builder = AlertDialog.Builder(activity)
+            .setTitle("Account")
+            .setMessage(message)
+            .setNegativeButton("Close", null)
+            .setOnDismissListener { activity.hideSystemUi() }
+        if (DeviceSync.uid() != null) {
+            builder.setPositiveButton("Sign out") { _, _ ->
+                DeviceSync.signOut()
+                toast(activity, "Signed out")
+            }
+        }
+        builder.show()
     }
 
     private fun confirmRemove(activity: MainActivity) {
