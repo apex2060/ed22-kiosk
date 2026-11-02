@@ -336,7 +336,7 @@ retried every 5 minutes.
 
 ```js
 policy: {
-  allowedApps: [{package: 'com.example.app', until: Timestamp | null}],  // null = no end time
+  allowedApps: [{package: 'com.example.app', until: number (epoch ms) | Timestamp | null}],  // null = no end time
   locked: false,
   command: {id: 'c-123', type: 'reload' | 'goHome' | 'reboot'}
 }
