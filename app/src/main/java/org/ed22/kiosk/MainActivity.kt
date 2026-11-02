@@ -104,7 +104,7 @@ class MainActivity : AppCompatActivity() {
         current = this
         DeviceSync.addListener(policyListener)
         updateLockOverlay()
-        addAppsButton()
+        // Native Apps button removed (2026-11-02): /mobile shows its own apps icon. addAppsButton() kept unused.
 
         cornerTaps = CornerTapDetector(KioskConfig.CORNER_SIZE_DP * resources.displayMetrics.density) {
             ParentMenu.prompt(this)

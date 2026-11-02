@@ -107,7 +107,7 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 | Account | Shows the signed-in Firebase uid, the device doc id, the listener status (including errors such as `PERMISSION_DENIED`) and the apps allowed right now, with a **Sign out** button. |
 | Remove kiosk lock | Removes device-owner status so the app can be uninstalled. Locking again needs a factory reset. |
 
-On the kiosk screen, an **Apps** button (bottom-left, above the parent-menu corner) appears whenever at least one installed app is allowed right now; it lists those apps (with "until" times) and opens them.
+Allowed apps are listed and opened by the ed22 page itself (the /mobile header apps icon) through `kiosk.apps.list()` / `kiosk.apps.launch()`.
 
 Five wrong PINs in a row lock the prompt for 60 seconds.
 
@@ -298,7 +298,6 @@ and pause while the screen is off.
 | `kiosk.apps.list()` | `[{package, label, allowed, until, icon}]` for launchable installed apps except Little Explorer. `until` is epoch ms or `null`. `icon` is the launcher icon as a 96x96 PNG data URL (`data:image/png;base64,...`), or `null` if it could not be rendered (cached per package + versionCode) |
 | `kiosk.apps.launch(package)` | Opens the app; rejects unless the policy allows it right now |
 
-Calling kiosk.apps.list() hides the native Apps button for that page (the page is expected to show its own).
 | `kiosk.call(method, args)` | Low-level access to any of the above by name |
 
 [`docs/kiosk-test.html`](docs/kiosk-test.html) exercises every call. Host it anywhere on
