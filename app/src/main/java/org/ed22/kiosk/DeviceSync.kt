@@ -52,7 +52,6 @@ object DeviceSync {
     /** Hash of the installedApps last written to the device doc (packages + versionCodes + labels). */
     private const val KEY_APPS_HASH = "installedAppsHash"
     const val ICON_PX_LIST = 96
-    const val ICON_PX_STATUS = 48
     private const val STATUS_WORK = "kiosk-status-periodic"
     private const val RETRY_MS = 5 * 60_000L
 
@@ -345,13 +344,14 @@ object DeviceSync {
 
     private fun appsHash(apps: List<LauncherApp>): String {
         val md = MessageDigest.getInstance("SHA-256")
+        md.update("v2-noicon\n".toByteArray())  // changed format: forces one rewrite on upgrade
         apps.sortedBy { it.pkg }.forEach { md.update("${it.pkg}\u0000${it.versionCode}\u0000${it.label}\n".toByteArray()) }
         return md.digest().joinToString("") { "%02x".format(it) }
     }
 
     /**
      * Writes `status.*` with update() and dotted paths, so no other field of the doc (or of `status`) is
-     * touched. `status.installedApps` (with 48 px icons) is only included when the app list changed
+     * touched. `status.installedApps` is only included when the app list changed
      * since the last successful write. Returns null when signed out.
      */
     fun reportStatus(ctx: Context): com.google.android.gms.tasks.Task<Void>? {
@@ -364,14 +364,8 @@ object DeviceSync {
         val p = prefs(ctx)
         val sendApps = p.getString(KEY_APPS_HASH, null) != hash
         if (sendApps) {
-            var bytes = 0
-            fields["status.installedApps"] = apps.map { app ->
-                val icon = iconDataUrl(ctx, app, ICON_PX_STATUS)
-                bytes += app.pkg.length + app.label.length + (icon?.length ?: 0)
-                mapOf("package" to app.pkg, "label" to app.label, "icon" to icon)
-            }
-            Log.i(TAG, "Writing status.installedApps: ${apps.size} apps, ~${bytes / 1024} KB")
-            if (bytes > 512 * 1024) Log.w(TAG, "status.installedApps is large (~${bytes / 1024} KB); Firestore docs max out at 1 MiB")
+            fields["status.installedApps"] = apps.map { app -> mapOf("package" to app.pkg, "label" to app.label) }
+            Log.i(TAG, "Writing status.installedApps: ${apps.size} apps")
         }
         return doc(id).update(fields)
             .addOnSuccessListener {

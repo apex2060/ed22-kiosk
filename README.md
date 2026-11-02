@@ -329,12 +329,11 @@ status: {
   deviceId,                 // same as kiosk.deviceId
   deviceOwner: true,
   policyNote: '',           // e.g. 'Allowed apps not enforced: app is not device owner'
-  installedApps: [{package, label, icon}]   // launchable apps, excluding Little Explorer
+  installedApps: [{package, label}]   // launchable apps, excluding Little Explorer
 }
 ```
 
-`installedApps[].icon` is a 48x48 PNG data URL (`data:image/png;base64,...`, about 2-7 KB each) or
-`null`. To keep writes small, `status.installedApps` is rewritten only when installed apps change
+No icons are stored here; a page on the tablet gets them from `kiosk.apps.list()`. To keep writes small, `status.installedApps` is rewritten only when installed apps change
 (packages, versionCodes or labels, compared with a hash of the last successful write); the other
 `status` fields are updated every time without touching it.
 
