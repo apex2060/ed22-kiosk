@@ -51,6 +51,8 @@ object DeviceSync {
     private const val KEY_COMMAND = "lastCommandId"
     /** Hash of the installedApps last written to the device doc (packages + versionCodes + labels). */
     private const val KEY_APPS_HASH = "installedAppsHash"
+    /** Hash of the appUsage last written to the device doc. */
+    private const val KEY_USAGE_HASH = "appUsageHash"
     const val ICON_PX_LIST = 96
     private const val STATUS_WORK = "kiosk-status-periodic"
     private const val RETRY_MS = 5 * 60_000L
@@ -105,7 +107,7 @@ object DeviceSync {
         auth.signInWithCustomToken(token)
             .addOnSuccessListener {
                 if (!docId.isNullOrBlank() && docId != deviceDocId()) {
-                    prefs(app).edit().putString(KEY_DOC, docId).remove(KEY_APPS_HASH).apply()
+                    prefs(app).edit().putString(KEY_DOC, docId).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).apply()
                 }
                 startListener()
                 reportStatus(app)
@@ -120,7 +122,7 @@ object DeviceSync {
     fun signOut() {
         stopListener()
         auth.signOut()
-        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_APPS_HASH).apply()
+        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).apply()
         listenerStatus = "Not signed in"
         onPolicy(JSONObject())
     }
@@ -320,11 +322,12 @@ object DeviceSync {
         val intent = ctx.packageManager.getLaunchIntentForPackage(pkg)
             ?: throw IllegalArgumentException("$pkg has no launcher activity")
         ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        AppUsage.start(ctx, pkg)
     }
 
     // --- status ---
 
-    /** Status fields other than installedApps (always written). */
+    /** Status fields other than installedApps and appUsage (always written). */
     fun statusMap(ctx: Context): Map<String, Any> {
         val battery = DeviceInfo.battery(ctx)
         return mapOf(
@@ -351,7 +354,7 @@ object DeviceSync {
 
     /**
      * Writes `status.*` with update() and dotted paths, so no other field of the doc (or of `status`) is
-     * touched. `status.installedApps` is only included when the app list changed
+     * touched. `status.installedApps` and `status.appUsage` are only included when they changed
      * since the last successful write. Returns null when signed out.
      */
     fun reportStatus(ctx: Context): com.google.android.gms.tasks.Task<Void>? {
@@ -367,13 +370,22 @@ object DeviceSync {
             fields["status.installedApps"] = apps.map { app -> mapOf("package" to app.pkg, "label" to app.label) }
             Log.i(TAG, "Writing status.installedApps: ${apps.size} apps")
         }
+        val usage = AppUsage.usageMap(ctx)
+        val usageHash = sha256(usage.toString())
+        val sendUsage = p.getString(KEY_USAGE_HASH, null) != usageHash
+        if (sendUsage) fields["status.appUsage"] = usage
         return doc(id).update(fields)
             .addOnSuccessListener {
                 // Only remember the hash once the server has it, and only for the doc it was written to.
-                if (sendApps && deviceDocId(ctx) == id) p.edit().putString(KEY_APPS_HASH, hash).apply()
+                if (deviceDocId(ctx) != id) return@addOnSuccessListener
+                if (sendApps) p.edit().putString(KEY_APPS_HASH, hash).apply()
+                if (sendUsage) p.edit().putString(KEY_USAGE_HASH, usageHash).apply()
             }
             .addOnFailureListener { e -> Log.w(TAG, "Status update failed", e) }
     }
+
+    private fun sha256(s: String): String =
+        MessageDigest.getInstance("SHA-256").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
     private fun toJson(v: Any?): Any = when (v) {
         null -> JSONObject.NULL

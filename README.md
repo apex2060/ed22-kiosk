@@ -297,6 +297,7 @@ and pause while the screen is off.
 | `kiosk.signOut()` | Signs out, stops the listener, and clears the device doc id and cached policy |
 | `kiosk.apps.list()` | `[{package, label, allowed, until, icon}]` for launchable installed apps except Little Explorer. `until` is epoch ms or `null`. `icon` is the launcher icon as a 96x96 PNG data URL (`data:image/png;base64,...`), or `null` if it could not be rendered (cached per package + versionCode) |
 | `kiosk.apps.launch(package)` | Opens the app; rejects unless the policy allows it right now |
+| `kiosk.apps.usage()` | Time spent in apps opened through Little Explorer: `{"yyyy-MM-dd": {"<package>": {seconds, label, opens}}}` for the last 14 days (same as `status.appUsage`, see [Device account and policy](#device-account-and-policy)) |
 
 | `kiosk.call(method, args)` | Low-level access to any of the above by name |
 
@@ -329,8 +330,21 @@ status: {
   deviceOwner: true,
   policyNote: '',           // e.g. 'Allowed apps not enforced: app is not device owner'
   installedApps: [{package, label}]   // launchable apps, excluding Little Explorer
+  appUsage: {                         // last 14 days, keyed by local date (device timezone)
+    '2026-11-02': {'com.example.app': {seconds: 754, label: 'Example', opens: 3}}
+  }
 }
 ```
+
+`status.appUsage` is a rough log that needs no Usage access permission: it only counts apps
+opened through Little Explorer (`kiosk.apps.launch`), from the launch until the kiosk is back in
+front (including expiry and `goHome`), the screen turns off, or another app is launched. Time spent
+in an app it switches to by itself is counted for the launched app. Sessions under 2 seconds are
+ignored, one session counts at most 12 hours, and a session's time (and its `opens`) goes to the
+date it started. The open session is kept in prefs, so it survives the app's process being
+killed. The whole map is written as one value, only when it changed since the last successful
+write, and a status report is sent after each session ends. A page on the tablet gets the same map from
+`kiosk.apps.usage()`.
 
 No icons are stored here; a page on the tablet gets them from `kiosk.apps.list()`. To keep writes small, `status.installedApps` is rewritten only when installed apps change
 (packages, versionCodes or labels, compared with a hash of the last successful write); the other

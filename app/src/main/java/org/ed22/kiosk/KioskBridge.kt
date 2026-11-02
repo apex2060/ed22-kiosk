@@ -253,6 +253,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
                 call.ok()
             }
             "appsList" -> call.ok(DeviceSync.appList(activity))
+            "appsUsage" -> call.ok(AppUsage.usage(activity))
             "appsLaunch" -> {
                 DeviceSync.launch(activity, args.optString("package"))
                 call.ok()

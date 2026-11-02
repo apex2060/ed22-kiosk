@@ -130,6 +130,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        AppUsage.end(this)
         if (!::webView.isInitialized) return
         inForeground = true
         hideSystemUi()

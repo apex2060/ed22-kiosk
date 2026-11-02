@@ -126,6 +126,7 @@
     // Other installed apps, and launching the ones the device doc's policy allows
     apps: {
       list: method('appsList'),
+      usage: method('appsUsage'),
       launch: function (pkg) { return call('appsLaunch', { package: String(pkg) }); }
     },
 
