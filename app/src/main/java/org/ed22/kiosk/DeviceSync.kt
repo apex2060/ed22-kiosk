@@ -321,5 +321,8 @@ class StatusWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
 
 /** Fires at the soonest allowedApps `until`. */
 class PolicyAlarmReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) = DeviceSync.enforce(context)
+    override fun onReceive(context: Context, intent: Intent) {
+        DeviceSync.enforce(context)
+        MainActivity.current?.refreshAppsButton()
+    }
 }

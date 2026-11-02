@@ -57,7 +57,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cornerTaps: CornerTapDetector
     private val handler = Handler(Looper.getMainLooper())
     private var lockOverlay: View? = null
-    private val policyListener: (org.json.JSONObject) -> Unit = { updateLockOverlay() }
+    private val policyListener: (org.json.JSONObject) -> Unit = { updateLockOverlay(); refreshAppsButton() }
+
+    private var appsButton: android.widget.TextView? = null
 
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
@@ -102,6 +104,7 @@ class MainActivity : AppCompatActivity() {
         current = this
         DeviceSync.addListener(policyListener)
         updateLockOverlay()
+        addAppsButton()
 
         cornerTaps = CornerTapDetector(KioskConfig.CORNER_SIZE_DP * resources.displayMetrics.density) {
             ParentMenu.prompt(this)
@@ -133,6 +136,98 @@ class MainActivity : AppCompatActivity() {
         KioskPolicy.startLockTask(this)
         webView.onResume()
         bridge.onResume()
+        refreshAppsButton()
+    }
+
+    // --- allowed apps launcher ---
+
+    private data class LaunchableApp(val pkg: String, val label: String, val until: Long?)
+
+    /** Installed, launchable apps the policy allows right now (same rules as DeviceSync.launch). */
+    private fun allowedLaunchable(): List<LaunchableApp> {
+        val list = DeviceSync.appList(this)
+        return (0 until list.length()).mapNotNull { i ->
+            val o = list.optJSONObject(i) ?: return@mapNotNull null
+            val pkg = o.optString("package")
+            if (!o.optBoolean("allowed") || packageManager.getLaunchIntentForPackage(pkg) == null) return@mapNotNull null
+            LaunchableApp(pkg, o.optString("label"), (o.opt("until") as? Number)?.toLong())
+        }
+    }
+
+    private fun addAppsButton() {
+        val d = resources.displayMetrics.density
+        val btn = android.widget.TextView(this).apply {
+            text = "\u25A6  Apps"
+            textSize = 18f
+            setTextColor(android.graphics.Color.WHITE)
+            setPadding((18 * d).toInt(), (10 * d).toInt(), (18 * d).toInt(), (10 * d).toInt())
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = 100 * d
+                setColor(0x99000000.toInt())
+            }
+            elevation = 6 * d
+            visibility = View.GONE
+            setOnClickListener { showAppsDialog() }
+        }
+        // Kept clear of the 80 dp parent-menu corner and the popup close button (top-right).
+        root.addView(btn, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            android.view.Gravity.BOTTOM or android.view.Gravity.START).apply {
+            leftMargin = (16 * d).toInt(); bottomMargin = (96 * d).toInt()
+        })
+        appsButton = btn
+        refreshAppsButton()
+    }
+
+    fun refreshAppsButton() {
+        if (!::root.isInitialized) return
+        if (Looper.myLooper() != Looper.getMainLooper()) { handler.post { refreshAppsButton() }; return }
+        val btn = appsButton ?: return
+        btn.visibility = if (runCatching { allowedLaunchable() }.getOrDefault(emptyList()).isNotEmpty()) View.VISIBLE else View.GONE
+        btn.bringToFront()
+    }
+
+    private fun showAppsDialog() {
+        val apps = allowedLaunchable()
+        refreshAppsButton()
+        if (apps.isEmpty()) return
+        val d = resources.displayMetrics.density
+        val fmt = android.text.format.DateFormat.getTimeFormat(this)
+        var dialog: androidx.appcompat.app.AlertDialog? = null
+        val list = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding((8 * d).toInt(), (8 * d).toInt(), (8 * d).toInt(), (8 * d).toInt())
+        }
+        apps.forEach { app ->
+            val row = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding((12 * d).toInt(), (10 * d).toInt(), (12 * d).toInt(), (10 * d).toInt())
+                isClickable = true
+                setOnClickListener {
+                    dialog?.dismiss()
+                    runCatching { DeviceSync.launch(this@MainActivity, app.pkg) }
+                        .onFailure { e -> android.widget.Toast.makeText(this@MainActivity, e.message, android.widget.Toast.LENGTH_SHORT).show(); refreshAppsButton() }
+                }
+            }
+            val icon = android.widget.ImageView(this).apply {
+                runCatching { setImageDrawable(packageManager.getApplicationIcon(app.pkg)) }
+            }
+            row.addView(icon, android.widget.LinearLayout.LayoutParams((48 * d).toInt(), (48 * d).toInt()))
+            val label = android.widget.TextView(this).apply {
+                text = app.label + (app.until?.let { "\nuntil " + fmt.format(java.util.Date(it)) } ?: "")
+                textSize = 18f
+                setPadding((16 * d).toInt(), 0, 0, 0)
+            }
+            row.addView(label, android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            list.addView(row)
+        }
+        dialog = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Apps")
+            .setView(android.widget.ScrollView(this).apply { addView(list) })
+            .setNegativeButton("Close", null)
+            .create()
+        dialog.setOnDismissListener { hideSystemUi() }
+        dialog.show()
     }
 
     override fun onPause() {

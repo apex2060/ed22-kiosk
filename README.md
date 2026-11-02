@@ -107,6 +107,8 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 | Account | Shows the signed-in Firebase uid, the device doc id, the listener status (including errors such as `PERMISSION_DENIED`) and the apps allowed right now, with a **Sign out** button. |
 | Remove kiosk lock | Removes device-owner status so the app can be uninstalled. Locking again needs a factory reset. |
 
+On the kiosk screen, an **Apps** button (bottom-left, above the parent-menu corner) appears whenever at least one installed app is allowed right now; it lists those apps (with "until" times) and opens them.
+
 Five wrong PINs in a row lock the prompt for 60 seconds.
 
 ## Browsing and history reporting
