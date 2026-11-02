@@ -112,7 +112,7 @@ object ParentMenu {
             .setPositiveButton("Remove") { _, _ ->
                 KioskPolicy.removeDeviceOwner(activity)
                 leave(activity, null)
-                toast(activity, "Kiosk lock removed. You can now uninstall ED22 Kiosk.")
+                toast(activity, "Kiosk lock removed. You can now uninstall Little Explorer.")
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -121,7 +121,7 @@ object ParentMenu {
     private fun exit(activity: MainActivity, then: Intent?) {
         KioskPolicy.release(activity)
         leave(activity, then)
-        toast(activity, "Kiosk paused. Open ED22 Kiosk or restart the device to lock it again.")
+        toast(activity, "Kiosk paused. Open Little Explorer or restart the device to lock it again.")
     }
 
     /** Closes the kiosk and opens [then], or the device's normal home screen. */

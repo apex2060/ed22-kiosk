@@ -1,5 +1,5 @@
 /*
- * window.kiosk: the page-side API of the ED22 Kiosk app.
+ * window.kiosk: the page-side API of the Little Explorer app.
  * Injected only into https://ed22.org and https://*.ed22.org pages.
  */
 (function () {

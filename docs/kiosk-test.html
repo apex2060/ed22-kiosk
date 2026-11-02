@@ -72,11 +72,11 @@
 
   if (!window.kiosk) {
     document.getElementById('status').textContent =
-      'window.kiosk is not available. Open this page inside ED22 Kiosk, on an https://ed22.org address.';
+      'window.kiosk is not available. Open this page inside Little Explorer, on an https://ed22.org address.';
   } else {
     kiosk.ready.then(function () {
       document.getElementById('status').textContent =
-        'Connected to ED22 Kiosk ' + kiosk.version + ' on device ' + kiosk.deviceId;
+        'Connected to Little Explorer ' + kiosk.version + ' on device ' + kiosk.deviceId;
     });
     kiosk.on('battery', function (b) { log('event: battery', b); });
     kiosk.on('network', function (n) { log('event: network', n); });
