@@ -3,6 +3,7 @@ package org.ed22.kiosk
 import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.AppOpsManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -10,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Process
 import android.os.UserManager
 import android.provider.Settings
 import android.util.Log
@@ -77,6 +79,32 @@ object KioskPolicy {
             dpm.setGlobalSetting(admin, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, all.toString())
         }
         AUTO_GRANT.forEach { grantPermission(ctx, it) }
+        grantOverlay(ctx)
+    }
+
+    /**
+     * "Display over other apps" (SYSTEM_ALERT_WINDOW) for the Back/Home tray over other apps. It is an
+     * app-op, not a runtime permission: setPermissionGrantState grants it on some devices, and the
+     * AppOps call usually needs a system app. Returns whether it is allowed now.
+     */
+    fun grantOverlay(ctx: Context): Boolean {
+        if (Settings.canDrawOverlays(ctx)) return true
+        if (!isDeviceOwner(ctx)) return false
+        grantPermission(ctx, Manifest.permission.SYSTEM_ALERT_WINDOW)
+        if (Settings.canDrawOverlays(ctx)) return true
+        try {
+            AppOpsManager::class.java
+                .getMethod("setMode", String::class.java, Int::class.java, String::class.java, Int::class.java)
+                .invoke(
+                    ctx.getSystemService(AppOpsManager::class.java),
+                    AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, Process.myUid(), ctx.packageName, AppOpsManager.MODE_ALLOWED
+                )
+        } catch (e: Exception) {
+            Log.i(TAG, "AppOps overlay grant not possible: ${e.cause ?: e}")
+        }
+        val ok = Settings.canDrawOverlays(ctx)
+        Log.i(TAG, "Display over other apps: ${if (ok) "allowed" else "not allowed"}")
+        return ok
     }
 
     /** Lock task allowlist: this app, [LOCK_TASK_EXTRAS] and the apps the device doc currently allows. */

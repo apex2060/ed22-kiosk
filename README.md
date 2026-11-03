@@ -4,12 +4,14 @@ An Android kiosk app that locks a device to a full-screen browser starting at
 **https://us.ed22.org/mobile**. It gives ed22.org pages a `window.kiosk` JavaScript API for
 system information and device features, can report every page visit to
 **https://us.ed22.org/me/history** (currently turned off), and hides a PIN-protected parent menu behind
-**4 quick taps in the bottom-left corner**.
+**4 quick taps in the bottom-left corner**. A slim **Back / Home tray** sits along the bottom of
+the screen, and **swipe down and hold** at the top of a page reloads it.
 
 ## Contents
 
 - [Installing on a device](#installing-on-a-device)
 - [The parent menu](#the-parent-menu)
+- [Back / Home tray and hold-to-refresh](#back--home-tray-and-hold-to-refresh)
 - [Browsing and history reporting](#browsing-and-history-reporting)
 - [The `kiosk.*` JavaScript API](#the-kiosk-javascript-api)
 - [Device account and policy](#device-account-and-policy)
@@ -70,7 +72,12 @@ does nothing: factory reset it first.
    already accounts or users on the device, remove them (or factory reset) and try again.
 5. Open **Little Explorer**. Set the parent PIN (4 to 8 digits). The device locks into the kiosk
    and opens https://us.ed22.org/mobile.
-6. (Optional) Leave USB debugging on so you can push updates with adb later. Kids can't reach
+6. (Optional) If the device didn't allow the app to grant itself "display over other apps"
+   (`status.overlayAllowed` is `false`), grant it so the Back / Home tray also shows over other apps:
+   ```sh
+   adb shell appops set org.ed22.kiosk SYSTEM_ALERT_WINDOW allow
+   ```
+7. (Optional) Leave USB debugging on so you can push updates with adb later. Kids can't reach
    Settings from the kiosk, so it is safe to keep.
 
 After this the kiosk starts on every boot, acts as the home screen, and keeps the screen on
@@ -94,7 +101,8 @@ recents buttons will leave it. The PIN screen shows a warning in that case.
 
 ## The parent menu
 
-Tap the **bottom-left corner 4 times within 3 seconds** (the target is about 80 dp square).
+Tap the **bottom-left corner of the page 4 times within 3 seconds** (the target is about 80 dp
+square, just above the Back / Home tray; taps on the tray don't count).
 Taps still reach the page, so the gesture never blocks the site. Enter the parent PIN to get:
 
 | Option | What it does |
@@ -110,6 +118,37 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 Allowed apps are listed and opened by the ed22 page itself (the /mobile header apps icon) through `kiosk.apps.list()` / `kiosk.apps.launch()`.
 
 Five wrong PINs in a row lock the prompt for 60 seconds.
+
+## Back / Home tray and hold-to-refresh
+
+**Hold-to-refresh.** When the page is scrolled to the top, swipe down (at least about 80 dp, mostly
+straight down) and **keep holding for 3 seconds**: a ring at the top fills, and the page reloads when
+it is full. Lifting the finger, moving back up or adding a second finger cancels. The touches still
+reach the page, and nothing happens unless the page itself is at the top, so normal scrolling and
+touch games are not affected. Pages that scroll inside their own container (not the page itself)
+always count as "at the top", but still need the 80 dp pull plus the 3-second hold.
+
+**Back / Home tray.** A 48 dp, semi-transparent dark bar along the bottom with **Back** (left) and
+**Home** (center). In the kiosk the page area ends above it, so it never covers the page.
+
+| | In the kiosk | In another app opened from the kiosk |
+| --- | --- | --- |
+| Back | Closes a popup or fullscreen video, else goes back in page history; does nothing without history | Returns to the kiosk, where the child left off (same as Home) |
+| Home (tap) | Nothing | Returns to the kiosk, where the child left off |
+| Home (hold 2 s, a ring fills) | Closes any popup and loads https://us.ed22.org/mobile (same as *Reload start page*) | Returns to the kiosk and loads the start page |
+
+Over other apps the tray is a "display over other apps" overlay (`TYPE_APPLICATION_OVERLAY`, owned by
+`KioskApp`). It shows only in kiosk mode (device owner, not released through the parent menu), while
+no Little Explorer screen is in front, and covers the bottom 48 dp of the other app. Returning
+uses the same path as allowed-app expiry, so `status.appUsage` sessions end as usual.
+
+- **Back in other apps can't press that app's Back.** Sending Back into another app needs an
+  accessibility service, so it returns to the kiosk instead. Use the app's own back button.
+- **The overlay permission.** `SYSTEM_ALERT_WINDOW` is an app-op, not a runtime permission. As
+  device owner the app tries `setPermissionGrantState` and then AppOps at startup; many devices refuse
+  both. Then the tray only shows inside the kiosk, logcat (`KioskTray`) says why, and
+  `status.overlayAllowed` is `false`. Fix it once with
+  `adb shell appops set org.ed22.kiosk SYSTEM_ALERT_WINDOW allow`.
 
 ## Browsing and history reporting
 
@@ -329,6 +368,7 @@ status: {
   deviceId,                 // same as kiosk.deviceId
   deviceOwner: true,
   policyNote: '',           // e.g. 'Allowed apps not enforced: app is not device owner'
+  overlayAllowed: true,     // "display over other apps", for the Back / Home tray over other apps
   installedApps: [{package, label}]   // launchable apps, excluding Little Explorer
   appUsage: {                         // last 14 days, keyed by local date (device timezone)
     '2026-11-02': {'com.example.app': {seconds: 754, label: 'Example', opens: 3}}
@@ -338,7 +378,7 @@ status: {
 
 `status.appUsage` is a rough log that needs no Usage access permission: it only counts apps
 opened through Little Explorer (`kiosk.apps.launch`), from the launch until the kiosk is back in
-front (including expiry and `goHome`), the screen turns off, or another app is launched. Time spent
+front (including expiry, `goHome` and the Back / Home tray), the screen turns off, or another app is launched. Time spent
 in an app it switches to by itself is counted for the launched app. Sessions under 2 seconds are
 ignored, one session counts at most 12 hours, and a session's time (and its `opens`) goes to the
 date it started. The open session is kept in prefs, so it survives the app's process being

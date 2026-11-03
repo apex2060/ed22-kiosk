@@ -186,11 +186,13 @@ object DeviceSync {
         }
     }
 
-    private fun openKiosk(ctx: Context) {
+    /** Brings the kiosk back to the front where it was; with [goHome], also resets it to the start page. */
+    fun openKiosk(ctx: Context, goHome: Boolean = false) {
         try {
             ctx.startActivity(
                 Intent(ctx, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    .putExtra(MainActivity.EXTRA_GO_HOME, goHome)
             )
         } catch (e: Exception) {
             Log.w(TAG, "Could not open the kiosk", e)
@@ -342,6 +344,7 @@ object DeviceSync {
             "deviceId" to Prefs.deviceId(ctx),
             "deviceOwner" to KioskPolicy.isDeviceOwner(ctx),
             "policyNote" to enforcementNote,
+            "overlayAllowed" to KioskTray.overlayAllowed(ctx),
         )
     }
 

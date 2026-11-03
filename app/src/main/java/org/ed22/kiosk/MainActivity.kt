@@ -38,6 +38,9 @@ import androidx.webkit.WebViewFeature
 
 class MainActivity : AppCompatActivity() {
     companion object {
+        /** Boolean extra on the kiosk intent: reset to the start page (Home held on the tray overlay). */
+        const val EXTRA_GO_HOME = "org.ed22.kiosk.GO_HOME"
+
         val LOCATION_PERMISSIONS = arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -55,6 +58,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var root: FrameLayout
     private lateinit var bridge: KioskBridge
     private lateinit var cornerTaps: CornerTapDetector
+    private lateinit var tray: TrayView
+    private var trayPx = 0
     private val handler = Handler(Looper.getMainLooper())
     private var lockOverlay: View? = null
     private val policyListener: (org.json.JSONObject) -> Unit = { updateLockOverlay(); refreshAppsButton() }
@@ -97,7 +102,17 @@ class MainActivity : AppCompatActivity() {
 
         root = FrameLayout(this)
         webView = WebView(this)
-        root.addView(webView, FrameLayout.LayoutParams(MATCH, MATCH))
+        trayPx = KioskTray.heightPx(this)
+        root.addView(webView, contentParams())
+        // Hold-to-refresh ring, top center over the page.
+        val refreshRing = HoldRing(this)
+        val ringPx = (40 * resources.displayMetrics.density).toInt()
+        root.addView(refreshRing, FrameLayout.LayoutParams(ringPx, ringPx, android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL)
+            .apply { topMargin = ringPx / 2 })
+        webView.setOnTouchListener(HoldToRefresh(webView, refreshRing) { webView.reload() })
+        // Back/Home tray along the bottom; the page area above is shortened by its height.
+        tray = TrayView(this, onBack = ::goBack, onHome = {}, onHomeHold = ::goHome)
+        root.addView(tray, FrameLayout.LayoutParams(MATCH, trayPx, android.view.Gravity.BOTTOM))
         setContentView(root)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUi()
@@ -127,6 +142,14 @@ class MainActivity : AppCompatActivity() {
         HistoryReporter.flush(this)
         Updater.schedule(this)
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_GO_HOME, false) && ::webView.isInitialized) goHome()
+    }
+
+    /** Full size minus the tray at the bottom (the page, popups and fullscreen video). */
+    private fun contentParams() = FrameLayout.LayoutParams(MATCH, MATCH).apply { bottomMargin = trayPx }
 
     override fun onResume() {
         super.onResume()
@@ -275,8 +298,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         // Watch for the parent gesture without stealing the touch from the page.
-        if (ev.actionMasked == MotionEvent.ACTION_DOWN && ::cornerTaps.isInitialized) {
-            cornerTaps.onDown(ev.x, ev.y, window.decorView.height)
+        // The corner is the bottom-left of the page, just above the tray; taps on the tray don't count.
+        val pageBottom = window.decorView.height - trayPx
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && ::cornerTaps.isInitialized && ev.y < pageBottom) {
+            cornerTaps.onDown(ev.x, ev.y, pageBottom)
         }
         return super.dispatchTouchEvent(ev)
     }
@@ -318,7 +343,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun goHome() {
+        if (customView != null) hideCustomView()
+        closePopup()
         webView.loadUrl(KioskConfig.START_URL)
+    }
+
+    /** Tray Back: closes a popup or fullscreen video first, else goes back in page history (if any). */
+    private fun goBack() {
+        when {
+            customView != null -> hideCustomView()
+            popup != null -> closePopup()
+            webView.canGoBack() -> webView.goBack()
+        }
     }
 
     fun isGranted(permission: String) =
@@ -435,7 +471,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { closePopup() }
         }
         frame.addView(close, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.TOP or android.view.Gravity.END))
-        root.addView(frame, FrameLayout.LayoutParams(MATCH, MATCH))
+        root.addView(frame, contentParams())
         lockOverlay?.bringToFront()
         popup = child
         popupFrame = frame
@@ -473,7 +509,7 @@ class MainActivity : AppCompatActivity() {
         }
         customView = view
         customViewCallback = callback
-        root.addView(view, FrameLayout.LayoutParams(MATCH, MATCH))
+        root.addView(view, contentParams())
         lockOverlay?.bringToFront()
         webView.visibility = View.GONE
     }

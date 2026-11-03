@@ -30,6 +30,10 @@ object KioskConfig {
     const val CORNER_TAP_WINDOW_MS = 3000L
     const val CORNER_SIZE_DP = 80
 
+    /** Hold-to-refresh: swipe down this far at the top of the page, then hold this long. */
+    const val REFRESH_PULL_DP = 80
+    const val REFRESH_HOLD_MS = 3000L
+
     fun isTrusted(uri: Uri?): Boolean {
         if (uri == null || uri.scheme != "https") return false
         val host = uri.host ?: return false
