@@ -13,7 +13,7 @@ import android.view.View
  * [stop] cancels and hides it. Timed with the clock, not an animator, so it still works when
  * system animations are turned off.
  */
-class HoldRing(ctx: Context, private val withBackground: Boolean = true) : View(ctx) {
+class HoldRing(ctx: Context) : View(ctx) {
     private val d = resources.displayMetrics.density
     private val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99000000.toInt() }
     private val track = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -66,8 +66,8 @@ class HoldRing(ctx: Context, private val withBackground: Boolean = true) : View(
         val size = minOf(width, height) / 2f
         val cx = width / 2f
         val cy = height / 2f
-        if (withBackground) canvas.drawCircle(cx, cy, size, bg)
-        val r = size - track.strokeWidth * (if (withBackground) 1.5f else 0.5f)
+        canvas.drawCircle(cx, cy, size, bg)
+        val r = size - track.strokeWidth * 1.5f
         oval.set(cx - r, cy - r, cx + r, cy + r)
         canvas.drawCircle(cx, cy, r, track)
         canvas.drawArc(oval, -90f, 360f * progress, false, arc)
