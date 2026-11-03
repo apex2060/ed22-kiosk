@@ -33,9 +33,12 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.text.DateFormat
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.math.ceil
 
 /**
  * Links the device to its Firestore doc `share/library/myItems/<deviceDocId>` (created by /mobile).
@@ -53,6 +56,7 @@ object DeviceSync {
     private const val KEY_APPS_HASH = "installedAppsHash"
     /** Hash of the appUsage last written to the device doc. */
     private const val KEY_USAGE_HASH = "appUsageHash"
+    private const val KEY_CHILD_USAGE_HASH = "appUsageByChildHash"
     const val ICON_PX_LIST = 96
     private const val STATUS_WORK = "kiosk-status-periodic"
     private const val RETRY_MS = 5 * 60_000L
@@ -107,7 +111,7 @@ object DeviceSync {
         auth.signInWithCustomToken(token)
             .addOnSuccessListener {
                 if (!docId.isNullOrBlank() && docId != deviceDocId()) {
-                    prefs(app).edit().putString(KEY_DOC, docId).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).apply()
+                    prefs(app).edit().putString(KEY_DOC, docId).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).apply()
                 }
                 startListener()
                 reportStatus(app)
@@ -122,7 +126,7 @@ object DeviceSync {
     fun signOut() {
         stopListener()
         auth.signOut()
-        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).apply()
+        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).apply()
         listenerStatus = "Not signed in"
         onPolicy(JSONObject())
     }
@@ -158,6 +162,12 @@ object DeviceSync {
                 (if (snap.metadata.isFromCache) ", from cache)" else ")")
             val policy = (toJson(snap.get("policy")) as? JSONObject) ?: JSONObject()
             prefs(app).edit().putString(KEY_POLICY, policy.toString()).apply()
+            // /mobile's activeStudentId: applied when it changes in the doc; kiosk.setActiveChild overrides it locally.
+            val docSid = snap.get("activeStudentId")?.toString() ?: ""
+            if (docSid != Prefs.docStudentId(app)) {
+                Prefs.setDocStudentId(app, docSid)
+                setActiveChild(app, docSid.ifEmpty { null })
+            }
             onPolicy(policy)
         }
     }
@@ -199,31 +209,51 @@ object DeviceSync {
 
     // --- allowed apps ---
 
-    /** `until` in epoch ms, or null for no end time. */
-    private fun allowedEntries(policy: JSONObject): Map<String, Long?> {
+    /** policy.allowedApps entries by package (the last one wins). */
+    private fun allowedEntries(policy: JSONObject): Map<String, JSONObject> {
         val list = policy.optJSONArray("allowedApps") ?: return emptyMap()
-        val out = LinkedHashMap<String, Long?>()
+        val out = LinkedHashMap<String, JSONObject>()
         for (i in 0 until list.length()) {
             val o = list.optJSONObject(i) ?: continue
             val pkg = o.optString("package").takeIf { it.isNotBlank() } ?: continue
-            out[pkg] = (o.opt("until") as? Number)?.toLong()
+            out[pkg] = o
         }
         return out
     }
 
+    /** [Rules] state of every allowedApps entry for the active child, in the tablet's time zone. */
+    fun appStates(ctx: Context, now: Long = System.currentTimeMillis()): Map<String, Rules.State> {
+        val sid = Prefs.activeStudentId(ctx)
+        val zone = ZoneId.systemDefault()
+        val used = Rules.Used { pkg, who, from, to -> AppUsage.usedMinutes(ctx, pkg, who, from, to) }
+        return allowedEntries(policy(ctx)).mapValues { (_, e) -> Rules.state(e, now, zone, sid, used) }
+    }
+
     fun allowedPackages(ctx: Context, now: Long = System.currentTimeMillis()): Set<String> =
-        allowedEntries(policy(ctx)).filter { (_, until) -> until == null || until > now }.keys
+        appStates(ctx, now).filterValues { it.allowed }.keys
 
-    fun isAllowed(ctx: Context, pkg: String) = pkg in allowedPackages(ctx)
+    fun isAllowed(ctx: Context, pkg: String) = appStates(ctx)[pkg]?.allowed == true
 
-    /** Recomputes lock task packages and the next expiry alarm. Safe to call any time. */
+    /** The child using the tablet (null = parent mode). Splits an open app session and re-checks the rules. */
+    fun setActiveChild(ctx: Context, studentId: String?) {
+        val sid = studentId?.takeIf { it.isNotBlank() }
+        if (sid == Prefs.activeStudentId(ctx)) return
+        Log.i(TAG, "Active child: ${sid ?: "parent"}")
+        AppUsage.switchChild(ctx) { Prefs.setActiveStudentId(ctx, sid) }
+        enforce(ctx)
+    }
+
+    /**
+     * Recomputes lock task packages and the next check alarm, and sends the child back to the kiosk
+     * when an app it opened (or any app that was allowed) is no longer allowed. Safe to call any time.
+     */
     fun enforce(ctx: Context) {
         val now = System.currentTimeMillis()
-        val entries = allowedEntries(policy(ctx))
-        val allowed = entries.filter { (_, until) -> until == null || until > now }.keys
-        scheduleExpiry(ctx, entries.values.filterNotNull().filter { it > now }.minOrNull())
+        val states = appStates(ctx, now)
+        val allowed = states.filterValues { it.allowed }.keys
+        scheduleCheck(ctx, now, states)
         if (!KioskPolicy.isDeviceOwner(ctx)) {
-            enforcementNote = if (entries.isEmpty()) "" else "Allowed apps not enforced: app is not device owner"
+            enforcementNote = if (states.isEmpty()) "" else "Allowed apps not enforced: app is not device owner"
             lastAllowed = allowed
             return
         }
@@ -231,16 +261,42 @@ object DeviceSync {
         KioskPolicy.setLockTaskPackages(ctx, allowed)
         val removed = lastAllowed?.minus(allowed).orEmpty()
         lastAllowed = allowed
-        if (removed.isNotEmpty() && !MainActivity.inForeground && !Prefs.isMaintenance(ctx)) {
-            Log.i(TAG, "No longer allowed: $removed; returning to the kiosk")
+        val open = AppUsage.openPkg(ctx)
+        val openGone = open != null && open !in allowed
+        if ((removed.isNotEmpty() || openGone) && !MainActivity.inForeground && !Prefs.isMaintenance(ctx)) {
+            Log.i(TAG, "No longer allowed: ${removed + listOfNotNull(open.takeIf { openGone })}; returning to the kiosk")
             openKiosk(ctx)
         }
     }
 
-    private fun scheduleExpiry(ctx: Context, at: Long?) {
+    /**
+     * ONE alarm at the next moment the answer can change: the soonest `until` / window end / extraUntil of an
+     * allowed app and, while an app opened from the kiosk is in front, its minutes running out and the next
+     * local midnight (new day, new budgets). A minute before that app runs out, it fires early for a warning.
+     */
+    private fun scheduleCheck(ctx: Context, now: Long, states: Map<String, Rules.State>) {
+        val times = states.values.filter { it.allowed }.mapNotNull { it.until }.toMutableList()
+        var kickAt: Long? = null
+        val openPkg = AppUsage.openPkg(ctx)
+        val open = openPkg?.let { states[it] }?.takeIf { it.allowed }
+        if (openPkg != null) {
+            times += Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate().plusDays(1)
+                .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        }
+        if (open != null) {
+            val runOut = if (open.left.isFinite()) now + (open.left * 60_000).toLong() else null
+            kickAt = listOfNotNull(open.until, runOut).minOrNull()
+            if (kickAt != null) times += kickAt
+        }
+        val at = times.filter { it > now }.minOrNull()
+        val warn = at != null && at == kickAt && at - now > 90_000
+        scheduleAlarm(ctx, if (warn) at!! - 60_000 else at, warn)
+    }
+
+    private fun scheduleAlarm(ctx: Context, at: Long?, warn: Boolean) {
         val am = ctx.getSystemService(AlarmManager::class.java)
         val pi = PendingIntent.getBroadcast(
-            ctx, 0, Intent(ctx, PolicyAlarmReceiver::class.java),
+            ctx, 0, Intent(ctx, PolicyAlarmReceiver::class.java).putExtra(PolicyAlarmReceiver.EXTRA_WARN, warn),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         am.cancel(pi)
@@ -253,16 +309,21 @@ object DeviceSync {
     }
 
     /**
-     * Launchable apps other than this one, with their policy state and (unless [withIcons] is false)
-     * `icon`: a 96 px PNG data URL, or null.
+     * Launchable apps other than this one, with their policy state for the active child (`allowed`, the entry's
+     * `until`, `left` minutes or null = no limit, `windowUntil` = when the current answer ends, `why` from [Rules])
+     * and (unless [withIcons] is false) `icon`: a 96 px PNG data URL, or null.
      */
     fun appList(ctx: Context, withIcons: Boolean = true): JSONArray {
         val entries = allowedEntries(policy(ctx))
-        val allowed = allowedPackages(ctx)
+        val states = appStates(ctx)
         val out = JSONArray()
         launcherApps(ctx).forEach { app ->
-            val o = JSONObject().put("package", app.pkg).put("label", app.label).put("allowed", app.pkg in allowed)
-                .put("until", entries[app.pkg] ?: JSONObject.NULL)
+            val st = states[app.pkg]?.takeIf { it.allowed }
+            val o = JSONObject().put("package", app.pkg).put("label", app.label).put("allowed", st != null)
+                .put("until", (entries[app.pkg]?.opt("until") as? Number)?.toLong() ?: JSONObject.NULL)
+                .put("left", st?.left?.takeIf { it.isFinite() }?.let { ceil(it).toInt() } ?: JSONObject.NULL)
+                .put("windowUntil", st?.until ?: JSONObject.NULL)
+                .put("why", states[app.pkg]?.why ?: "none")
             if (withIcons) o.put("icon", iconDataUrl(ctx, app, ICON_PX_LIST) ?: JSONObject.NULL)
             out.put(o)
         }
@@ -321,8 +382,11 @@ object DeviceSync {
         if (!isAllowed(ctx, pkg)) throw IllegalStateException("$pkg is not allowed right now")
         val intent = ctx.packageManager.getLaunchIntentForPackage(pkg)
             ?: throw IllegalArgumentException("$pkg has no launcher activity")
+        // Lock task packages follow the rules as of now (a window may have just opened).
+        KioskPolicy.setLockTaskPackages(ctx, allowedPackages(ctx))
         ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         AppUsage.start(ctx, pkg)
+        enforce(ctx) // arms the alarm for this app's window / minutes
     }
 
     // --- status ---
@@ -342,6 +406,8 @@ object DeviceSync {
             "deviceId" to Prefs.deviceId(ctx),
             "deviceOwner" to KioskPolicy.isDeviceOwner(ctx),
             "policyNote" to enforcementNote,
+            "timeZone" to ZoneId.systemDefault().id,
+            "features" to listOf("rules", "ruleLimits"),
         )
     }
 
@@ -374,12 +440,17 @@ object DeviceSync {
         val usageHash = sha256(usage.toString())
         val sendUsage = p.getString(KEY_USAGE_HASH, null) != usageHash
         if (sendUsage) fields["status.appUsage"] = usage
+        val byChild = AppUsage.usageByChildMap(ctx)
+        val byChildHash = sha256(byChild.toString())
+        val sendByChild = p.getString(KEY_CHILD_USAGE_HASH, null) != byChildHash
+        if (sendByChild) fields["status.appUsageByChild"] = byChild
         return doc(id).update(fields)
             .addOnSuccessListener {
                 // Only remember the hash once the server has it, and only for the doc it was written to.
                 if (deviceDocId(ctx) != id) return@addOnSuccessListener
                 if (sendApps) p.edit().putString(KEY_APPS_HASH, hash).apply()
                 if (sendUsage) p.edit().putString(KEY_USAGE_HASH, usageHash).apply()
+                if (sendByChild) p.edit().putString(KEY_CHILD_USAGE_HASH, byChildHash).apply()
             }
             .addOnFailureListener { e -> Log.w(TAG, "Status update failed", e) }
     }
@@ -410,10 +481,19 @@ class StatusWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params)
     }
 }
 
-/** Fires at the soonest allowedApps `until`. */
+/** The rules check alarm (see DeviceSync.scheduleCheck), and time / time-zone changes. */
 class PolicyAlarmReceiver : BroadcastReceiver() {
+    companion object {
+        const val EXTRA_WARN = "warn"
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         DeviceSync.enforce(context)
         MainActivity.current?.refreshAppsButton()
+        if (intent.action == null && intent.getBooleanExtra(EXTRA_WARN, false) &&
+            AppUsage.openPkg(context) != null && !MainActivity.inForeground
+        ) {
+            android.widget.Toast.makeText(context, "1 minute left", android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 }

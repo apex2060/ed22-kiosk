@@ -1,0 +1,875 @@
+[
+ {
+  "name": "window start inclusive",
+  "entry": {
+   "package": "khan",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava",
+      "ben"
+     ],
+     "start": "08:00",
+     "end": "10:00"
+    },
+    {
+     "days": [
+      0,
+      6
+     ],
+     "studentIds": [
+      "ben"
+     ],
+     "minutesPerDay": 45
+    }
+   ]
+  },
+  "time": "2026-11-03T08:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": true,
+   "left": "Infinity",
+   "until": "2026-11-03T10:00"
+  }
+ },
+ {
+  "name": "window end exclusive",
+  "entry": {
+   "package": "khan",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava",
+      "ben"
+     ],
+     "start": "08:00",
+     "end": "10:00"
+    },
+    {
+     "days": [
+      0,
+      6
+     ],
+     "studentIds": [
+      "ben"
+     ],
+     "minutesPerDay": 45
+    }
+   ]
+  },
+  "time": "2026-11-03T10:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "before window",
+  "entry": {
+   "package": "khan",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava",
+      "ben"
+     ],
+     "start": "08:00",
+     "end": "10:00"
+    },
+    {
+     "days": [
+      0,
+      6
+     ],
+     "studentIds": [
+      "ben"
+     ],
+     "minutesPerDay": 45
+    }
+   ]
+  },
+  "time": "2026-11-03T07:59",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "child not in rule",
+  "entry": {
+   "package": "khan",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava",
+      "ben"
+     ],
+     "start": "08:00",
+     "end": "10:00"
+    },
+    {
+     "days": [
+      0,
+      6
+     ],
+     "studentIds": [
+      "ben"
+     ],
+     "minutesPerDay": 45
+    }
+   ]
+  },
+  "time": "2026-11-03T09:00",
+  "studentId": "cy",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "parent mode ignores children",
+  "entry": {
+   "package": "khan",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava",
+      "ben"
+     ],
+     "start": "08:00",
+     "end": "10:00"
+    },
+    {
+     "days": [
+      0,
+      6
+     ],
+     "studentIds": [
+      "ben"
+     ],
+     "minutesPerDay": 45
+    }
+   ]
+  },
+  "time": "2026-11-03T09:00",
+  "studentId": null,
+  "sessions": [],
+  "expect": {
+   "allowed": true
+  }
+ },
+ {
+  "name": "overnight, evening of start day",
+  "entry": {
+   "package": "audio",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      5
+     ],
+     "start": "20:00",
+     "end": "07:00"
+    }
+   ]
+  },
+  "time": "2026-11-06T23:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": true,
+   "until": "2026-11-07T07:00"
+  }
+ },
+ {
+  "name": "overnight, morning after",
+  "entry": {
+   "package": "audio",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      5
+     ],
+     "start": "20:00",
+     "end": "07:00"
+    }
+   ]
+  },
+  "time": "2026-11-07T06:30",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": true
+  }
+ },
+ {
+  "name": "overnight, ends 7:00",
+  "entry": {
+   "package": "audio",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      5
+     ],
+     "start": "20:00",
+     "end": "07:00"
+    }
+   ]
+  },
+  "time": "2026-11-07T07:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "overnight, morning of start day is not in it",
+  "entry": {
+   "package": "audio",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      5
+     ],
+     "start": "20:00",
+     "end": "07:00"
+    }
+   ]
+  },
+  "time": "2026-11-06T06:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "duration only: 45 - 40 = 5 left",
+  "entry": {
+   "package": "khan",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava",
+      "ben"
+     ],
+     "start": "08:00",
+     "end": "10:00"
+    },
+    {
+     "days": [
+      0,
+      6
+     ],
+     "studentIds": [
+      "ben"
+     ],
+     "minutesPerDay": 45
+    }
+   ]
+  },
+  "time": "2026-11-07T12:00",
+  "studentId": "ben",
+  "sessions": [
+   {
+    "pkg": "khan",
+    "studentId": "ben",
+    "from": "2026-11-07T09:00",
+    "to": "2026-11-07T09:40"
+   }
+  ],
+  "expect": {
+   "allowed": true,
+   "left": 5
+  }
+ },
+ {
+  "name": "duration used up",
+  "entry": {
+   "package": "khan",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava",
+      "ben"
+     ],
+     "start": "08:00",
+     "end": "10:00"
+    },
+    {
+     "days": [
+      0,
+      6
+     ],
+     "studentIds": [
+      "ben"
+     ],
+     "minutesPerDay": 45
+    }
+   ]
+  },
+  "time": "2026-11-07T13:00",
+  "studentId": "ben",
+  "sessions": [
+   {
+    "pkg": "khan",
+    "studentId": "ben",
+    "from": "2026-11-07T09:00",
+    "to": "2026-11-07T09:45"
+   }
+  ],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "new day, new budget",
+  "entry": {
+   "package": "khan",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava",
+      "ben"
+     ],
+     "start": "08:00",
+     "end": "10:00"
+    },
+    {
+     "days": [
+      0,
+      6
+     ],
+     "studentIds": [
+      "ben"
+     ],
+     "minutesPerDay": 45
+    }
+   ]
+  },
+  "time": "2026-11-08T08:00",
+  "studentId": "ben",
+  "sessions": [
+   {
+    "pkg": "khan",
+    "studentId": "ben",
+    "from": "2026-11-07T09:00",
+    "to": "2026-11-07T09:45"
+   }
+  ],
+  "expect": {
+   "allowed": true,
+   "left": 45
+  }
+ },
+ {
+  "name": "window + limit: 12 left",
+  "entry": {
+   "package": "epic",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava"
+     ],
+     "start": "08:00",
+     "end": "10:00",
+     "minutesPerDay": 30
+    },
+    {
+     "start": "19:00",
+     "end": "20:30"
+    }
+   ]
+  },
+  "time": "2026-11-03T09:22",
+  "studentId": "ava",
+  "sessions": [
+   {
+    "pkg": "epic",
+    "studentId": "ava",
+    "from": "2026-11-03T08:30",
+    "to": "2026-11-03T08:48"
+   }
+  ],
+  "expect": {
+   "allowed": true,
+   "left": 12,
+   "until": "2026-11-03T10:00"
+  }
+ },
+ {
+  "name": "time before the window does not count",
+  "entry": {
+   "package": "epic",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava"
+     ],
+     "start": "08:00",
+     "end": "10:00",
+     "minutesPerDay": 30
+    },
+    {
+     "start": "19:00",
+     "end": "20:30"
+    }
+   ]
+  },
+  "time": "2026-11-03T09:22",
+  "studentId": "ava",
+  "sessions": [
+   {
+    "pkg": "epic",
+    "studentId": "ava",
+    "from": "2026-11-03T07:00",
+    "to": "2026-11-03T07:59"
+   }
+  ],
+  "expect": {
+   "allowed": true,
+   "left": 30
+  }
+ },
+ {
+  "name": "evening rule has its own budget",
+  "entry": {
+   "package": "epic",
+   "until": null,
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava"
+     ],
+     "start": "08:00",
+     "end": "10:00",
+     "minutesPerDay": 30
+    },
+    {
+     "start": "19:00",
+     "end": "20:30"
+    }
+   ]
+  },
+  "time": "2026-11-03T19:30",
+  "studentId": "ava",
+  "sessions": [
+   {
+    "pkg": "epic",
+    "studentId": "ava",
+    "from": "2026-11-03T08:00",
+    "to": "2026-11-03T08:40"
+   }
+  ],
+  "expect": {
+   "allowed": true,
+   "left": "Infinity"
+  }
+ },
+ {
+  "name": "budget is per child",
+  "entry": {
+   "package": "scratch",
+   "until": null,
+   "rules": [
+    {
+     "minutesPerDay": 20
+    }
+   ]
+  },
+  "time": "2026-11-03T09:00",
+  "studentId": "ben",
+  "sessions": [
+   {
+    "pkg": "scratch",
+    "studentId": "ava",
+    "from": "2026-11-03T07:00",
+    "to": "2026-11-03T07:20"
+   }
+  ],
+  "expect": {
+   "allowed": true,
+   "left": 20
+  }
+ },
+ {
+  "name": "budget used up for that child",
+  "entry": {
+   "package": "scratch",
+   "until": null,
+   "rules": [
+    {
+     "minutesPerDay": 20
+    }
+   ]
+  },
+  "time": "2026-11-03T09:00",
+  "studentId": "ava",
+  "sessions": [
+   {
+    "pkg": "scratch",
+    "studentId": "ava",
+    "from": "2026-11-03T07:00",
+    "to": "2026-11-03T07:20"
+   }
+  ],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "extra time overrides an empty budget",
+  "entry": {
+   "package": "scratch",
+   "until": null,
+   "rules": [
+    {
+     "minutesPerDay": 20
+    }
+   ],
+   "extraUntil": 1793725200000
+  },
+  "time": "2026-11-03T09:22",
+  "studentId": "ava",
+  "sessions": [
+   {
+    "pkg": "scratch",
+    "studentId": "ava",
+    "from": "2026-11-03T07:00",
+    "to": "2026-11-03T07:20"
+   }
+  ],
+  "expect": {
+   "allowed": true,
+   "left": 38,
+   "until": "2026-11-03T10:00"
+  }
+ },
+ {
+  "name": "extra time over: rules again",
+  "entry": {
+   "package": "scratch",
+   "until": null,
+   "rules": [
+    {
+     "minutesPerDay": 20
+    }
+   ],
+   "extraUntil": 1793725200000
+  },
+  "time": "2026-11-03T10:00",
+  "studentId": "ava",
+  "sessions": [
+   {
+    "pkg": "scratch",
+    "studentId": "ava",
+    "from": "2026-11-03T07:00",
+    "to": "2026-11-03T07:20"
+   }
+  ],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "overlap: most generous rule",
+  "entry": {
+   "package": "two",
+   "until": null,
+   "rules": [
+    {
+     "start": "08:00",
+     "end": "12:00",
+     "minutesPerDay": 30
+    },
+    {
+     "start": "09:00",
+     "end": "10:00",
+     "minutesPerDay": 15
+    }
+   ]
+  },
+  "time": "2026-11-03T09:30",
+  "studentId": "ava",
+  "sessions": [
+   {
+    "pkg": "two",
+    "studentId": "ava",
+    "from": "2026-11-03T09:00",
+    "to": "2026-11-03T09:10"
+   }
+  ],
+  "expect": {
+   "allowed": true,
+   "left": 20
+  }
+ },
+ {
+  "name": "legacy until null",
+  "entry": {
+   "package": "old",
+   "until": null
+  },
+  "time": "2026-11-01T03:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": true,
+   "left": "Infinity"
+  }
+ },
+ {
+  "name": "legacy until passed",
+  "entry": {
+   "package": "old",
+   "until": 1793721600000
+  },
+  "time": "2026-11-03T10:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "legacy until ahead",
+  "entry": {
+   "package": "old",
+   "until": 1793728800000
+  },
+  "time": "2026-11-03T10:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": true,
+   "until": "2026-11-03T11:00"
+  }
+ },
+ {
+  "name": "legacy days/children: match",
+  "entry": {
+   "package": "old",
+   "until": null,
+   "days": [
+    2
+   ],
+   "studentIds": [
+    "ava"
+   ]
+  },
+  "time": "2026-11-03T10:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": true
+  }
+ },
+ {
+  "name": "legacy days/children: other child",
+  "entry": {
+   "package": "old",
+   "until": null,
+   "days": [
+    2
+   ],
+   "studentIds": [
+    "ava"
+   ]
+  },
+  "time": "2026-11-03T10:00",
+  "studentId": "ben",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "legacy days: other day",
+  "entry": {
+   "package": "old",
+   "until": null,
+   "days": [
+    3
+   ]
+  },
+  "time": "2026-11-03T10:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "legacy extraUntil is ignored (plain entries use until)",
+  "entry": {
+   "package": "old",
+   "until": null,
+   "days": [
+    3
+   ],
+   "extraUntil": 1793728800000
+  },
+  "time": "2026-11-03T10:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ },
+ {
+  "name": "rules win over the top-level copy",
+  "entry": {
+   "package": "old",
+   "until": null,
+   "days": [
+    3
+   ],
+   "rules": [
+    {
+     "days": [
+      2
+     ]
+    }
+   ]
+  },
+  "time": "2026-11-03T10:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": true
+  }
+ },
+ {
+  "name": "rule entry with until:null + mirror",
+  "entry": {
+   "package": "k",
+   "until": null,
+   "days": [
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "studentIds": [
+    "ava"
+   ],
+   "rules": [
+    {
+     "days": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ],
+     "studentIds": [
+      "ava"
+     ],
+     "start": "08:00",
+     "end": "10:00"
+    }
+   ]
+  },
+  "time": "2026-11-03T11:00",
+  "studentId": "ava",
+  "sessions": [],
+  "expect": {
+   "allowed": false
+  }
+ }
+]

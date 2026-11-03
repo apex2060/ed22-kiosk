@@ -121,6 +121,10 @@
       return call('setAuth', { token: String(opts.token), deviceDocId: opts.deviceDocId == null ? null : String(opts.deviceDocId) });
     },
     getAuth: method('getAuth'),
+    // The child using the tablet (null = parent mode), for the allowed-apps rules; works offline
+    setActiveChild: function (studentId) {
+      return call('setActiveChild', { studentId: studentId == null ? null : String(studentId) });
+    },
     signOut: method('signOut'),
 
     // Other installed apps, and launching the ones the device doc's policy allows

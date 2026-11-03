@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
     <!-- Self-updater (installs silently only as device owner). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Exact alarm for the allowed-apps rules (window end, minutes used up). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <!-- Runtime permissions, granted silently when the app is device owner. -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -122,6 +125,11 @@
 
         <receiver
             android:name=".PolicyAlarmReceiver"
-            android:exported="false" />
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

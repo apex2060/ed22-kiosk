@@ -252,6 +252,10 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
                 DeviceSync.signOut()
                 call.ok()
             }
+            "setActiveChild" -> {
+                DeviceSync.setActiveChild(activity, if (args.isNull("studentId")) null else args.optString("studentId"))
+                call.ok(Prefs.activeStudentId(activity) ?: JSONObject.NULL)
+            }
             "appsList" -> call.ok(DeviceSync.appList(activity))
             "appsUsage" -> call.ok(AppUsage.usage(activity))
             "appsLaunch" -> {

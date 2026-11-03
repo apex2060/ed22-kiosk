@@ -81,6 +81,14 @@ object KioskPolicy {
                 BatteryManager.BATTERY_PLUGGED_WIRELESS
             dpm.setGlobalSetting(admin, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, all.toString())
         }
+        // Automatic date, time and time zone, so the allowed-apps rules can't be dodged by changing the clock.
+        if (Build.VERSION.SDK_INT >= 30) {
+            safely("auto time") { dpm.setAutoTimeEnabled(admin, true) }
+            safely("auto time zone") { dpm.setAutoTimeZoneEnabled(admin, true) }
+        } else {
+            @Suppress("DEPRECATION")
+            safely("auto time") { dpm.setAutoTimeRequired(admin, true) }
+        }
         AUTO_GRANT.forEach { grantPermission(ctx, it) }
     }
 
