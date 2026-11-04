@@ -321,6 +321,9 @@ and pause while the screen is off.
 | `kiosk.signOut()` | Signs out, stops the listener, and clears the device doc id and cached policy |
 | `kiosk.setActiveChild(studentId \| null)` | Sets the child using the tablet (`null` = parent mode) for the [allowed-apps rules](#allowed-apps-rules). Stored on the device, so it works offline. Resolves the active `studentId` (or `null`) |
 | `kiosk.apps.list()` | `[{package, label, allowed, until, left, windowUntil, why, icon}]` for launchable installed apps except Little Explorer, for the active child right now. `until` is the entry's own `until` (epoch ms or `null`). `left` = minutes left (`null` = no limit or not allowed), `windowUntil` = epoch ms when the current answer ends (window end, `extraUntil`, `until`; `null` = no end or not allowed), `why` = edRules' reason: `rule`, `extra`, `legacy` (allowed or not, entry without rules), `rules` (no rule applies now: day, child, window or minutes used up), `none` (not in the policy). `icon` is the launcher icon as a 96x96 PNG data URL (`data:image/png;base64,...`), or `null` if it could not be rendered (cached per package + versionCode) |
+| `kiosk.policy.set(policy)` (alias `kiosk.setPolicy`) | Pushes a policy from the page, offline too (same shape as the doc's `policy`; `locked` and `command` are ignored). Saved on the device and applied at once if its `rev` is newer than the doc's (see [Policy from the page](#policy-from-the-page)). Resolves `{rev, source}`; rejects when not signed in |
+| `kiosk.policy.get()` | `{policy, rev, source: 'doc' \| 'local'}`: the policy in force (`rev` 0 = none) |
+| `kiosk.apps.usageByChild()` | Same map as `status.appUsageByChild`, from the local session log |
 | `kiosk.apps.launch(package)` | Opens the app; rejects unless the policy allows it right now |
 | `kiosk.apps.usage()` | Time spent in apps opened through Little Explorer: `{"yyyy-MM-dd": {"<package>": {seconds, label, opens}}}` for the last 14 days (same as `status.appUsage`, see [Device account and policy](#device-account-and-policy)) |
 
@@ -355,7 +358,9 @@ status: {
   deviceOwner: true,
   policyNote: '',           // e.g. 'Allowed apps not enforced: app is not device owner'
   timeZone: 'America/Phoenix',          // the tablet's IANA time zone (rules use its local time)
-  features: ['rules', 'ruleLimits'],    // this build enforces allowedApps rules and their limits
+  features: ['rules', 'ruleLimits', 'strict', 'localPolicy', 'elsewhere', 'appsUsageByChild', 'appsEvent'],
+  policyRev: 1793768520000,             // rev of the policy in force (0 = none)
+  policySource: 'doc',                  // 'doc' | 'local' (pushed with kiosk.policy.set)
   installedApps: [{package, label}]   // launchable apps, excluding Little Explorer
   appUsage: {                         // last 14 days, keyed by local date (device timezone)
     '2026-11-02': {'com.example.app': {seconds: 754, label: 'Example', opens: 3}}
@@ -396,7 +401,10 @@ policy: {
   allowedApps: [{package: 'com.example.app', until: number (epoch ms) | Timestamp | null,  // null = no end time
                 days?, studentIds?,                                  // legacy: only used without rules
                 rules?: [{days?: [0-6], studentIds?: [id], start?: 'HH:MM', end?: 'HH:MM', minutesPerDay?: n}],
-                extraUntil?: ms}],
+                extraUntil?: ms,
+                elsewhere?: {<studentId>: {date: 'yyyy-MM-dd', minutes: n}}}],  // minutes used today on other tablets
+  strict?: true,        // lock everything unless a rule allows it (see Allowed-apps rules)
+  rev?: number,         // epoch ms; the newer of doc / kiosk.policy.set wins
   locked: false,
   command: {id: 'c-123', type: 'reload' | 'goHome' | 'reboot'}
 }
@@ -431,10 +439,21 @@ The rule logic is a Kotlin port (`Rules.kt`) of ed22's `edRules.js`, tested on t
 - **Limits** (`minutesPerDay`) count per child, per rule, per window (for an all-day rule, per local day), from
   the session log above, including the app that is open now. In parent mode (no active child) `studentIds` are
   ignored and a limit counts everyone's use. If several rules match, the one with the most minutes left wins.
+- **`policy.strict: true`** locks everything unless a rule allows it: (a) in parent mode (no active child),
+  entries with `rules` allow nothing except a future `extraUntil`; (b) entries without `rules` allow only while
+  `until` is a number in the future (`until: null`, `days`, `studentIds` grant nothing); (c) an entry with an empty
+  `rules` list allows nothing. Without `strict` nothing changes.
+- **`elsewhere`**: `elsewhere[studentId] = {date, minutes}` is that child's use of the app on other tablets today.
+  When `date` is today in the tablet's time zone, `minutes` is added to the child's used minutes in every limited
+  rule of that app (even outside a rule's window, so it errs on the strict side). Ignored on other dates and in parent
+  mode.
 - **The active child** is the device's `studentId` (null = parent mode). `kiosk.setActiveChild()` sets it right
   away, offline too. The doc's top-level `activeStudentId` also sets it, but only when that value changes in the
   doc, so a stale doc value doesn't undo a newer local `setActiveChild()`. A change splits the open session and
   re-checks the rules.
+- **`kiosk.on('apps', fn)`** gets `{allowed: [package, …]}` whenever the allowed set changes (a window opens or
+  ends, minutes run out, extra time ends, a policy or child change). The check alarm also fires at the next start of
+  any timed rule, so an opening window is noticed on time.
 - **Sending the child back:** while an app opened from the kiosk is in front, one exact alarm is set for the
   earliest of: its window end, its minutes running out, `extraUntil`, `until`, the soonest end of any other allowed
   app, and the next local midnight. When it fires the rules are re-checked: the lock task allowlist is updated and,
@@ -447,6 +466,15 @@ The rule logic is a Kotlin port (`Rules.kt`) of ed22's `edRules.js`, tested on t
 - **Automatic date and time:** as device owner the app turns on automatic date, time and time zone
   (`setAutoTimeEnabled` / `setAutoTimeZoneEnabled` on Android 11+, `setAutoTimeRequired` on Android 8–10, which
   only forces automatic time), so a child can't dodge the rules by changing the clock.
+
+### Policy from the page
+
+`kiosk.policy.set(policy)` saves the page's policy on the device (kept across restarts, cleared on sign-out) and
+applies it at once: rules, lock task allowlist and the check alarm. The doc's policy and the local one are both kept;
+the one with the higher `rev` (epoch ms, missing = 0) is in force, and a tie goes to the doc. So a doc snapshot with
+an older or missing `rev` doesn't replace a newer local push, and a newer doc policy does. `locked` and `command`
+always come from the doc. `kiosk.on('policy')`, `kiosk.getAuth().policy` and `kiosk.policy.get()` show the policy in
+force; `status.policyRev` / `status.policySource` report it (a status report is sent when either changes).
 
 **Firestore rules** must let the signed-in custom-token uid read the doc and update its `status`
 field (for example, that uid is in the doc's `_writeIds` / `_readIds`).

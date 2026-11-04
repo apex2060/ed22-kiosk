@@ -51,6 +51,8 @@ object DeviceSync {
     private const val PREFS = "kiosk_account"
     private const val KEY_DOC = "deviceDocId"
     private const val KEY_POLICY = "policy"
+    /** The policy pushed by the page with kiosk.policy.set (see [setLocalPolicy]). */
+    private const val KEY_LOCAL_POLICY = "localPolicy"
     private const val KEY_COMMAND = "lastCommandId"
     /** Hash of the installedApps last written to the device doc (packages + versionCodes + labels). */
     private const val KEY_APPS_HASH = "installedAppsHash"
@@ -96,8 +98,35 @@ object DeviceSync {
     fun deviceDocId(ctx: Context = app): String? = prefs(ctx).getString(KEY_DOC, null)
     fun isSignedIn() = auth.currentUser != null && deviceDocId() != null
 
-    fun policy(ctx: Context = app): JSONObject =
-        prefs(ctx).getString(KEY_POLICY, null)?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
+    private fun stored(ctx: Context, key: String): JSONObject? =
+        prefs(ctx).getString(key, null)?.let { runCatching { JSONObject(it) }.getOrNull() }
+
+    private fun inForce(ctx: Context) = Rules.pickPolicy(stored(ctx, KEY_POLICY), stored(ctx, KEY_LOCAL_POLICY))
+
+    /** The policy in force: the doc's, or the page-pushed one when its `rev` is higher (see [Rules.pickPolicy]). */
+    fun policy(ctx: Context = app): JSONObject = inForce(ctx).first
+
+    /** 'doc' or 'local'. */
+    fun policySource(ctx: Context = app): String = inForce(ctx).second
+
+    /** The applied policy's `rev` (0 = none). */
+    fun policyRev(ctx: Context = app): Long = Rules.rev(policy(ctx))
+
+    /** kiosk.policy.set: saves [p] (minus locked / command) as the local policy and applies it if it is newer. */
+    fun setLocalPolicy(ctx: Context, p: JSONObject): JSONObject {
+        if (!isSignedIn()) throw IllegalStateException("Not signed in")
+        val local = JSONObject(p.toString()).apply { remove("locked"); remove("command") }
+        prefs(ctx).edit().putString(KEY_LOCAL_POLICY, local.toString()).commit()
+        applyPolicy()
+        return JSONObject().put("rev", policyRev(ctx)).put("source", policySource(ctx))
+    }
+
+    /** `{policy, rev, source}` for kiosk.policy.get(). */
+    fun policyInfo(ctx: Context = app): JSONObject = JSONObject()
+        .put("policy", policy(ctx)).put("rev", policyRev(ctx)).put("source", policySource(ctx))
+
+    /** Called with the allowed package list whenever the allowed set changes (kiosk.on('apps')). */
+    val appsListeners = mutableSetOf<(Set<String>) -> Unit>()
 
     fun addListener(fn: (JSONObject) -> Unit) { listeners += fn }
     fun removeListener(fn: (JSONObject) -> Unit) { listeners -= fn }
@@ -126,9 +155,9 @@ object DeviceSync {
     fun signOut() {
         stopListener()
         auth.signOut()
-        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).apply()
+        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_LOCAL_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).apply()
         listenerStatus = "Not signed in"
-        onPolicy(JSONObject())
+        applyPolicy()
     }
 
     private fun doc(docId: String): DocumentReference =
@@ -168,14 +197,23 @@ object DeviceSync {
                 Prefs.setDocStudentId(app, docSid)
                 setActiveChild(app, docSid.ifEmpty { null })
             }
-            onPolicy(policy)
+            runCommand(policy.optJSONObject("command"))
+            applyPolicy()
         }
     }
 
-    private fun onPolicy(policy: JSONObject) {
+    private var reportedPolicy: String? = null
+
+    /** Applies the policy in force (rules, lock task, alarm), tells listeners, and reports a new rev / source. */
+    private fun applyPolicy() {
         enforce(app)
-        runCommand(policy.optJSONObject("command"))
+        val policy = policy(app)
         listeners.toList().forEach { runCatching { it(policy) }.onFailure { e -> Log.w(TAG, "policy listener", e) } }
+        val key = "${policyRev(app)}|${policySource(app)}"
+        if (key != reportedPolicy) {
+            reportedPolicy = key
+            reportStatus(app)
+        }
     }
 
     // --- commands ---
@@ -226,7 +264,9 @@ object DeviceSync {
         val sid = Prefs.activeStudentId(ctx)
         val zone = ZoneId.systemDefault()
         val used = Rules.Used { pkg, who, from, to -> AppUsage.usedMinutes(ctx, pkg, who, from, to) }
-        return allowedEntries(policy(ctx)).mapValues { (_, e) -> Rules.state(e, now, zone, sid, used) }
+        val policy = policy(ctx)
+        val strict = policy.optBoolean("strict", false)
+        return allowedEntries(policy).mapValues { (_, e) -> Rules.state(e, now, zone, sid, used, strict) }
     }
 
     fun allowedPackages(ctx: Context, now: Long = System.currentTimeMillis()): Set<String> =
@@ -252,6 +292,7 @@ object DeviceSync {
         val states = appStates(ctx, now)
         val allowed = states.filterValues { it.allowed }.keys
         scheduleCheck(ctx, now, states)
+        if (allowed != lastAllowed) appsListeners.toList().forEach { runCatching { it(allowed) } }
         if (!KioskPolicy.isDeviceOwner(ctx)) {
             enforcementNote = if (states.isEmpty()) "" else "Allowed apps not enforced: app is not device owner"
             lastAllowed = allowed
@@ -288,9 +329,23 @@ object DeviceSync {
             kickAt = listOfNotNull(open.until, runOut).minOrNull()
             if (kickAt != null) times += kickAt
         }
-        val at = times.filter { it > now }.minOrNull()
+        times += nextWindowStart(ctx, now) ?: Long.MAX_VALUE // so an opening window updates lock task and kiosk.on('apps')
+        val at = times.filter { it > now && it != Long.MAX_VALUE }.minOrNull()
         val warn = at != null && at == kickAt && at - now > 90_000
         scheduleAlarm(ctx, if (warn) at!! - 60_000 else at, warn)
+    }
+
+    /** The next start time (within a day) of any timed rule in the policy; days and children are not checked. */
+    private fun nextWindowStart(ctx: Context, now: Long): Long? {
+        val zone = ZoneId.systemDefault()
+        val t = Instant.ofEpochMilli(now).atZone(zone)
+        return allowedEntries(policy(ctx)).values.flatMap { e ->
+            val rules = e.optJSONArray("rules") ?: return@flatMap emptyList()
+            (0 until rules.length()).mapNotNull { rules.optJSONObject(it)?.takeIf(Rules::timed)?.optString("start") }
+        }.mapNotNull { Rules.minutes(it) }.map { m ->
+            val today = t.toLocalDate().atStartOfDay(zone).plusMinutes(m.toLong())
+            (if (today.isAfter(t)) today else today.plusDays(1)).toInstant().toEpochMilli()
+        }.minOrNull()
     }
 
     private fun scheduleAlarm(ctx: Context, at: Long?, warn: Boolean) {
@@ -407,7 +462,9 @@ object DeviceSync {
             "deviceOwner" to KioskPolicy.isDeviceOwner(ctx),
             "policyNote" to enforcementNote,
             "timeZone" to ZoneId.systemDefault().id,
-            "features" to listOf("rules", "ruleLimits"),
+            "features" to listOf("rules", "ruleLimits", "strict", "localPolicy", "elsewhere", "appsUsageByChild", "appsEvent"),
+            "policyRev" to policyRev(ctx),
+            "policySource" to policySource(ctx),
         )
     }
 

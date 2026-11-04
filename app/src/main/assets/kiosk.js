@@ -57,7 +57,7 @@
     /** Low-level access to any native method: kiosk.call('getBattery'). */
     call: call,
 
-    /** Subscribe to pushed events: 'battery', 'network', 'nfc', 'speech', 'focus', 'screen', 'policy'. */
+    /** Subscribe to pushed events: 'battery', 'network', 'nfc', 'speech', 'focus', 'screen', 'policy', 'apps'. */
     on: function (event, fn) { (listeners[event] = listeners[event] || []).push(fn); },
     off: function (event, fn) {
       var list = listeners[event];
@@ -121,6 +121,11 @@
       return call('setAuth', { token: String(opts.token), deviceDocId: opts.deviceDocId == null ? null : String(opts.deviceDocId) });
     },
     getAuth: method('getAuth'),
+    // Push a policy from the page (offline-safe); the newer rev of {doc, local} is applied
+    policy: {
+      set: function (policy) { return call('policySet', { policy: policy }); },
+      get: method('policyGet')
+    },
     // The child using the tablet (null = parent mode), for the allowed-apps rules; works offline
     setActiveChild: function (studentId) {
       return call('setActiveChild', { studentId: studentId == null ? null : String(studentId) });
@@ -131,6 +136,7 @@
     apps: {
       list: method('appsList'),
       usage: method('appsUsage'),
+      usageByChild: method('appsUsageByChild'),
       launch: function (pkg) { return call('appsLaunch', { package: String(pkg) }); }
     },
 
@@ -152,6 +158,7 @@
     goHome: method('goHome'),
     reboot: method('reboot')
   };
+  kiosk.setPolicy = kiosk.policy.set;
 
   kiosk.ready = call('hello').then(function (info) {
     kiosk.version = info.version;

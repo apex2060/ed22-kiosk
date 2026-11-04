@@ -80,6 +80,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
     private var lastBattery: String? = null
     private var lastNetwork: String? = null
     private val policyListener: (JSONObject) -> Unit = { policy -> emit("policy", policy) }
+    private val appsListener: (Set<String>) -> Unit = { allowed -> emit("apps", JSONObject().put("allowed", JSONArray(allowed.sorted()))) }
 
     private inner class Call(val id: Int, val proxy: JavaScriptReplyProxy) {
         fun ok(result: Any? = true) =
@@ -113,6 +114,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
         DeviceSync.addListener(policyListener)
+        DeviceSync.appsListeners += appsListener
     }
 
     fun onNavigation(webView: WebView, url: String) {
@@ -137,6 +139,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
 
     fun destroy() {
         DeviceSync.removeListener(policyListener)
+        DeviceSync.appsListeners -= appsListener
         sensors.clearAll()
         try {
             activity.unregisterReceiver(batteryReceiver)
@@ -258,6 +261,9 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
             }
             "appsList" -> call.ok(DeviceSync.appList(activity))
             "appsUsage" -> call.ok(AppUsage.usage(activity))
+            "appsUsageByChild" -> call.ok(JSONObject(AppUsage.usageByChildMap(activity)))
+            "policySet" -> call.ok(DeviceSync.setLocalPolicy(activity, args.optJSONObject("policy") ?: throw IllegalArgumentException("policy is required")))
+            "policyGet" -> call.ok(DeviceSync.policyInfo(activity))
             "appsLaunch" -> {
                 DeviceSync.launch(activity, args.optString("package"))
                 call.ok()
