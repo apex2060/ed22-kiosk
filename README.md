@@ -358,7 +358,7 @@ status: {
   deviceOwner: true,
   policyNote: '',           // e.g. 'Allowed apps not enforced: app is not device owner'
   timeZone: 'America/Phoenix',          // the tablet's IANA time zone (rules use its local time)
-  features: ['rules', 'ruleLimits', 'strict', 'localPolicy', 'elsewhere', 'appsUsageByChild', 'appsEvent'],
+  features: ['rules', 'ruleLimits', 'strict', 'localPolicy', 'elsewhere', 'appsUsageByChild', 'appsEvent', 'openApp'],
   policyRev: 1793768520000,             // rev of the policy in force (0 = none)
   policySource: 'doc',                  // 'doc' | 'local' (pushed with kiosk.policy.set)
   installedApps: [{package, label}]   // launchable apps, excluding Little Explorer
@@ -407,6 +407,7 @@ policy: {
   rev?: number,         // epoch ms; the newer of doc / kiosk.policy.set wins
   locked: false,
   command: {id: 'c-123', type: 'reload' | 'goHome' | 'reboot'}
+        // or {id: '<epoch ms>', type: 'openApp', package: 'com.android.vending'}
 }
 ```
 
@@ -420,7 +421,11 @@ policy: {
   parent-menu corner taps and PIN still work.
 - **`command`**: runs once per `id` (the last handled id is remembered on the device, including
   across sign-outs). `reboot` needs device owner. Note: a command that is already in the doc when
-  a device first signs in runs once.
+  a device first signs in runs once. The policy in the same snapshot is applied first, then the command.
+  **`openApp`** (`status.features` has `'openApp'`) opens `package` like `kiosk.apps.launch` (usage session,
+  alarm, back to the kiosk when its time ends or its entry is removed). It is dropped (id still used up) when
+  the id isn't epoch ms or is more than 2 minutes old, when `locked` is true, or when the app isn't allowed
+  right now in the policy in force.
 - In the page, `kiosk.on('policy', fn)` gets the new policy on each change (`until` as epoch ms),
   and `kiosk.getAuth()` includes the cached one.
 

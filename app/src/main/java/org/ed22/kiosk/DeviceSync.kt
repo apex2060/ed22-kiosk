@@ -197,8 +197,9 @@ object DeviceSync {
                 Prefs.setDocStudentId(app, docSid)
                 setActiveChild(app, docSid.ifEmpty { null })
             }
-            runCommand(policy.optJSONObject("command"))
+            // Policy first, so an openApp in the same snapshot sees the new allowedApps (the other commands don't read it).
             applyPolicy()
+            runCommand(policy.optJSONObject("command"))
         }
     }
 
@@ -218,18 +219,28 @@ object DeviceSync {
 
     // --- commands ---
 
+    /** Runs policy.command once per id (see [RemoteCommands.decide]). Call after [applyPolicy]. */
     private fun runCommand(cmd: JSONObject?) {
-        val id = cmd?.opt("id")?.takeUnless { it == JSONObject.NULL }?.toString() ?: return
         val p = prefs(app)
-        if (p.getString(KEY_COMMAND, null) == id) return
+        val d = RemoteCommands.decide(
+            cmd, p.getString(KEY_COMMAND, null), System.currentTimeMillis(),
+            locked = policy(app).optBoolean("locked", false), isAllowed = { isAllowed(app, it) },
+        )
         // Saved synchronously first so a reboot command can never loop.
-        p.edit().putString(KEY_COMMAND, id).commit()
+        if (d.handled) p.edit().putString(KEY_COMMAND, RemoteCommands.id(cmd)).commit()
+        if (!d.run) {
+            if (d.handled) Log.w(TAG, "Dropped command ${RemoteCommands.id(cmd)} (${cmd?.optString("type")}): ${d.reason}")
+            return
+        }
+        cmd!!
         val activity = MainActivity.current
-        Log.i(TAG, "Running command $id: ${cmd.optString("type")}")
+        Log.i(TAG, "Running command ${RemoteCommands.id(cmd)}: ${cmd.optString("type")}")
         when (cmd.optString("type")) {
             "reload" -> activity?.webView?.reload() ?: openKiosk(app)
             "goHome" -> activity?.goHome() ?: openKiosk(app)
             "reboot" -> if (!KioskPolicy.reboot(app)) Log.w(TAG, "reboot needs device owner")
+            "openApp" -> runCatching { launch(app, cmd.optString("package")) }
+                .onFailure { e -> Log.w(TAG, "openApp ${cmd.optString("package")} failed: ${e.message}") }
             else -> Log.w(TAG, "Unknown command type: ${cmd.optString("type")}")
         }
     }
@@ -300,12 +311,10 @@ object DeviceSync {
         }
         enforcementNote = ""
         KioskPolicy.setLockTaskPackages(ctx, allowed)
-        val removed = lastAllowed?.minus(allowed).orEmpty()
+        val gone = RemoteCommands.noLongerAllowed(lastAllowed, allowed, AppUsage.openPkg(ctx))
         lastAllowed = allowed
-        val open = AppUsage.openPkg(ctx)
-        val openGone = open != null && open !in allowed
-        if ((removed.isNotEmpty() || openGone) && !MainActivity.inForeground && !Prefs.isMaintenance(ctx)) {
-            Log.i(TAG, "No longer allowed: ${removed + listOfNotNull(open.takeIf { openGone })}; returning to the kiosk")
+        if (gone.isNotEmpty() && !MainActivity.inForeground && !Prefs.isMaintenance(ctx)) {
+            Log.i(TAG, "No longer allowed: $gone; returning to the kiosk")
             openKiosk(ctx)
         }
     }
@@ -462,7 +471,7 @@ object DeviceSync {
             "deviceOwner" to KioskPolicy.isDeviceOwner(ctx),
             "policyNote" to enforcementNote,
             "timeZone" to ZoneId.systemDefault().id,
-            "features" to listOf("rules", "ruleLimits", "strict", "localPolicy", "elsewhere", "appsUsageByChild", "appsEvent"),
+            "features" to RemoteCommands.FEATURES,
             "policyRev" to policyRev(ctx),
             "policySource" to policySource(ctx),
         )
