@@ -191,9 +191,8 @@ object DeviceSync {
                 (if (snap.metadata.isFromCache) ", from cache)" else ")")
             val policy = (toJson(snap.get("policy")) as? JSONObject) ?: JSONObject()
             prefs(app).edit().putString(KEY_POLICY, policy.toString()).apply()
-            // /mobile's activeChildId (old name activeStudentId, read when activeChildId is missing / null): applied when
-            // the resolved value changes in the doc; kiosk.setActiveChild overrides it locally.
-            val docSid = Rules.pickChildId(snap.get("activeChildId"), snap.get("activeStudentId")) ?: ""
+            // /mobile's activeStudentId: applied when it changes in the doc; kiosk.setActiveChild overrides it locally.
+            val docSid = Rules.docActiveStudentId(snap.get("activeStudentId"))
             if (docSid != Prefs.docStudentId(app)) {
                 Prefs.setDocStudentId(app, docSid)
                 setActiveChild(app, docSid.ifEmpty { null })

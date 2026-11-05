@@ -127,11 +127,17 @@
       get: method('policyGet')
     },
     // The child using the tablet (null = parent mode), for the allowed-apps rules; works offline.
-    // An id string, or {childId} / {studentId} (childId first).
+    // An id string, or {studentId}. Objects are not String()'d (that would become "[object Object]").
+    // An object with no studentId key is forwarded without that field so the native side leaves the active child unchanged.
     setActiveChild: function (child) {
-      var id = child;
-      if (child != null && typeof child === 'object') id = child.childId != null ? child.childId : child.studentId;
-      return call('setActiveChild', { childId: id == null ? null : String(id) });
+      if (child != null && typeof child === 'object') {
+        if (!Object.prototype.hasOwnProperty.call(child, 'studentId')) {
+          return call('setActiveChild', {});
+        }
+        var sid = child.studentId;
+        return call('setActiveChild', { studentId: sid == null ? null : String(sid) });
+      }
+      return call('setActiveChild', { studentId: child == null ? null : String(child) });
     },
     signOut: method('signOut'),
 
