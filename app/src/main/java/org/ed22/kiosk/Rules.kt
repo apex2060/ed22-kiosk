@@ -12,7 +12,9 @@ import kotlin.math.max
  * Kotlin port of ed22's edRules.js `state()` (the allowed-apps rule logic shared with /mobile and /me),
  * checked against the same rules/cases.json in RulesTest. Pure: the time, zone, child and usage are passed in.
  *
- * policy.allowedApps[i] = {package, until, days?, studentIds?, rules?: [{days?, studentIds?, start?, end?, minutesPerDay?}], extraUntil?}
+ * policy.allowedApps[i] = {package, until, days?, childIds?, rules?: [{days?, childIds?, start?, end?, minutesPerDay?}], extraUntil?}
+ * `childIds` (students/{id} doc ids) is the new name of `studentIds`: wherever `childIds` is an array it is used and
+ * `studentIds` is ignored, else `studentIds` is read (see [childIds]). Everything below that says studentIds means either.
  * With rules: allowed if extraUntil > now, or ANY rule matches the day, the child and the window and has minutes left
  * (top-level days/studentIds are then a copy for old clients and ignored). Tablet local time, start inclusive, end
  * exclusive, start > end = overnight (days = the day it starts), no start/end = the whole day. A limit is per child,
@@ -50,6 +52,13 @@ object Rules {
         val a = o?.opt(key) as? JSONArray ?: return emptyList()
         return (0 until a.length()).map { a.opt(it) }
     }
+
+    /** [o]'s `childIds` when it is an array (even empty), else its `studentIds`. */
+    fun childIds(o: JSONObject?): List<Any?> = if (o?.opt("childIds") is JSONArray) arr(o, "childIds") else arr(o, "studentIds")
+
+    /** A child id given under both names (doc fields, setActiveChild args): [childId] unless it is null / JSON null. */
+    fun pickChildId(childId: Any?, studentId: Any?): String? =
+        (childId.takeUnless { it == null || it == JSONObject.NULL } ?: studentId.takeUnless { it == JSONObject.NULL })?.toString()
 
     private fun kidOk(ids: List<Any?>, sid: String?) = ids.isEmpty() || sid.isNullOrEmpty() || ids.any { it == sid }
 
@@ -100,7 +109,7 @@ object Rules {
     }
 
     private fun ruleState(pkg: String, r: JSONObject?, now: ZonedDateTime, sid: String?, used: Used?, elsewhere: Double): State? {
-        if (r == null || !kidOk(arr(r, "studentIds"), sid)) return null
+        if (r == null || !kidOk(childIds(r), sid)) return null
         val w = windowNow(r, now) ?: return null
         val limit = limitOf(r)
         val left = if (limit == null) Double.POSITIVE_INFINITY
@@ -152,7 +161,7 @@ object Rules {
         }
         val u = entry.opt("until")
         val untilOk = (!strict && (u == null || u == JSONObject.NULL)) || (u is Number && u.toDouble() > nowMs) // (b)
-        val ok = untilOk && dayOk(arr(entry, "days"), dayOf(now)) && kidOk(arr(entry, "studentIds"), sid)
+        val ok = untilOk && dayOk(arr(entry, "days"), dayOf(now)) && kidOk(childIds(entry), sid)
         return if (ok) State(true, "legacy", until = (u as? Number)?.toLong()) else State(false, "legacy")
     }
 }

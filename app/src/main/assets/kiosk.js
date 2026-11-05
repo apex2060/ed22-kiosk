@@ -126,9 +126,12 @@
       set: function (policy) { return call('policySet', { policy: policy }); },
       get: method('policyGet')
     },
-    // The child using the tablet (null = parent mode), for the allowed-apps rules; works offline
-    setActiveChild: function (studentId) {
-      return call('setActiveChild', { studentId: studentId == null ? null : String(studentId) });
+    // The child using the tablet (null = parent mode), for the allowed-apps rules; works offline.
+    // An id string, or {childId} / {studentId} (childId first).
+    setActiveChild: function (child) {
+      var id = child;
+      if (child != null && typeof child === 'object') id = child.childId != null ? child.childId : child.studentId;
+      return call('setActiveChild', { childId: id == null ? null : String(id) });
     },
     signOut: method('signOut'),
 

@@ -8,7 +8,7 @@ object RemoteCommands {
     const val OPEN_APP_MAX_AGE_MS = 2 * 60_000L
 
     /** `status.features` (kept here so a JVM test can check it). /me sends openApp only when "openApp" is listed. */
-    val FEATURES = listOf("rules", "ruleLimits", "strict", "localPolicy", "elsewhere", "appsUsageByChild", "appsEvent", "openApp")
+    val FEATURES = listOf("rules", "ruleLimits", "strict", "localPolicy", "elsewhere", "appsUsageByChild", "appsEvent", "openApp", "childId")
 
     /** [run] = do it; [handled] = remember the id so it never runs again; [reason] for the log when not run. */
     data class Decision(val run: Boolean, val handled: Boolean, val reason: String)
