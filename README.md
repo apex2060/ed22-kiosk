@@ -5,13 +5,13 @@ An Android kiosk app that locks a device to a full-screen browser starting at
 system information and device features, can report every page visit to
 **https://us.ed22.org/me/history** (currently turned off), and hides a PIN-protected parent menu behind
 **4 quick taps in the bottom-left corner**. Navigation is the system navigation bar (Back and
-Home), and **swipe down and hold** at the top of a page reloads it.
+Home).
 
 ## Contents
 
 - [Installing on a device](#installing-on-a-device)
 - [The parent menu](#the-parent-menu)
-- [Navigation and hold-to-refresh](#navigation-and-hold-to-refresh)
+- [Navigation](#navigation)
 - [Browsing and history reporting](#browsing-and-history-reporting)
 - [The `kiosk.*` JavaScript API](#the-kiosk-javascript-api)
 - [Device account and policy](#device-account-and-policy)
@@ -113,7 +113,7 @@ Allowed apps are listed and opened by the ed22 page itself (the /mobile header a
 
 Five wrong PINs in a row lock the prompt for 60 seconds.
 
-## Navigation and hold-to-refresh
+## Navigation
 
 Navigation is the **system navigation bar**; Little Explorer draws no buttons of its own. As device
 owner it is the persistent default home app, and lock task mode enables the Home button
@@ -127,13 +127,6 @@ owner it is the persistent default home app, and lock task mode enables the Home
 Returning with Home ends the `status.appUsage` session like any other return to the kiosk.
 **Holding** Home (or a long-press assistant gesture) can't be customized by the app. The Home button
 needs Android 9+ for the lock task feature; on Android 8 lock task mode hides it.
-
-**Hold-to-refresh.** When the page is scrolled to the top, swipe down (at least about 80 dp, mostly
-straight down) and **keep holding for 3 seconds**: a ring at the top fills, and the page reloads when
-it is full. Lifting the finger, moving back up or adding a second finger cancels. The touches still
-reach the page, and nothing happens unless the page itself is at the top, so normal scrolling and
-touch games are not affected. Pages that scroll inside their own container (not the page itself)
-always count as "at the top", but still need the 80 dp pull plus the 3-second hold.
 
 ## Browsing and history reporting
 

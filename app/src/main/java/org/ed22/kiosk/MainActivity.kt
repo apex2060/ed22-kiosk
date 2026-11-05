@@ -99,12 +99,6 @@ class MainActivity : AppCompatActivity() {
         root = FrameLayout(this)
         webView = WebView(this)
         root.addView(webView, FrameLayout.LayoutParams(MATCH, MATCH))
-        // Hold-to-refresh ring, top center over the page.
-        val refreshRing = HoldRing(this)
-        val ringPx = (40 * resources.displayMetrics.density).toInt()
-        root.addView(refreshRing, FrameLayout.LayoutParams(ringPx, ringPx, android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL)
-            .apply { topMargin = ringPx / 2 })
-        webView.setOnTouchListener(HoldToRefresh(webView, refreshRing) { webView.reload() })
         setContentView(root)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUi()
