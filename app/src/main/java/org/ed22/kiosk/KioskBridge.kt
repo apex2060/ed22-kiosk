@@ -460,11 +460,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
         return volumes()
     }
 
-    private fun setKeepScreenOn(on: Boolean): Boolean {
-        val flag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-        if (on) activity.window.addFlags(flag) else activity.window.clearFlags(flag)
-        return on
-    }
+    private fun setKeepScreenOn(on: Boolean): Boolean = activity.setKeepScreenOnWanted(on)
 
     private fun setTorch(on: Boolean): Boolean {
         val cm = activity.getSystemService(CameraManager::class.java)

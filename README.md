@@ -410,8 +410,13 @@ policy: {
   allowed while the kiosk isn't in front, the kiosk is brought back to the front. Apps are never hidden
   or uninstalled. Without device owner, nothing is enforced and `status.policyNote` says so.
 - **`activeStudentId`** (top level of the doc, written by /mobile): see [the active child](#allowed-apps-rules).
-- **`locked: true`**: covers the page with a full-screen "This device is locked" screen. The
-  parent-menu corner taps and PIN still work.
+- **`locked: true`**: covers the page with the native lock screen (local time, date, battery,
+  then "This device is locked"). After 22 seconds with no touches the screen turns off for real
+  (device-owner `lockNow`, not a black overlay), including while charging. The power button wakes
+  back to that same lock screen. Tap-to-wake is only whatever the tablet already does; the app
+  cannot turn it on. Parent-menu corner taps and the PIN still work, including after wake, and the
+  screen is not put to sleep while a parent dialog is open. Unlocked, the screen stays as before
+  (including staying on while plugged in).
 - **`command`**: runs once per `id` (the last handled id is remembered on the device, including
   across sign-outs). `reboot` needs device owner. Note: a command that is already in the doc when
   a device first signs in runs once. The policy in the same snapshot is applied first, then the command.

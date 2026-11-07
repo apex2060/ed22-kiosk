@@ -52,12 +52,8 @@ object ParentMenu {
                 }
             }
         }
-        dialog.setOnDismissListener {
-            input.removeCallbacks(timeout)
-            activity.hideSystemUi()
-        }
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
-        dialog.show()
+        dialog.present(activity) { input.removeCallbacks(timeout) }
         input.postDelayed(timeout, PROMPT_TIMEOUT_MS)
     }
 
@@ -87,8 +83,8 @@ object ParentMenu {
                 }
             }
             .setNegativeButton("Close", null)
-            .setOnDismissListener { activity.hideSystemUi() }
-            .show()
+            .create()
+            .present(activity)
     }
 
     private fun showUpdates(activity: MainActivity) {
@@ -100,8 +96,8 @@ object ParentMenu {
                 toast(activity, "Checking for updates. Reopen this screen in a minute to see the result.")
             }
             .setNegativeButton("Close", null)
-            .setOnDismissListener { activity.hideSystemUi() }
-            .show()
+            .create()
+            .present(activity)
     }
 
     private fun showAccount(activity: MainActivity) {
@@ -115,14 +111,13 @@ object ParentMenu {
             .setTitle("Account")
             .setMessage(message)
             .setNegativeButton("Close", null)
-            .setOnDismissListener { activity.hideSystemUi() }
         if (DeviceSync.uid() != null) {
             builder.setPositiveButton("Sign out") { _, _ ->
                 DeviceSync.signOut()
                 toast(activity, "Signed out")
             }
         }
-        builder.show()
+        builder.create().present(activity)
     }
 
     private fun confirmRemove(activity: MainActivity) {
@@ -138,7 +133,8 @@ object ParentMenu {
                 toast(activity, "Kiosk lock removed. You can now uninstall Little Explorer.")
             }
             .setNegativeButton("Cancel", null)
-            .show()
+            .create()
+            .present(activity)
     }
 
     private fun exit(activity: MainActivity, then: Intent?) {
@@ -167,6 +163,25 @@ object ParentMenu {
             .firstOrNull { it.activityInfo.packageName != activity.packageName }
             ?: return null
         return home.setClassName(other.activityInfo.packageName, other.activityInfo.name)
+    }
+
+    /** Shows a parent dialog and holds the lock-cover sleep timer until it closes. */
+    private fun AlertDialog.present(activity: MainActivity, onDismiss: (() -> Unit)? = null) {
+        activity.parentDialogShown()
+        setOnDismissListener {
+            try {
+                onDismiss?.invoke()
+            } finally {
+                activity.parentDialogHidden()
+                activity.hideSystemUi()
+            }
+        }
+        try {
+            show()
+        } catch (e: Exception) {
+            activity.parentDialogHidden()
+            throw e
+        }
     }
 
     private fun padded(activity: MainActivity, input: EditText): FrameLayout {
