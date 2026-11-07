@@ -14,6 +14,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -71,15 +73,32 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (lockOverlay == null || isDestroyed) return
             when {
+                // Screen off leaves the cover and its clock/battery receivers in place.
+                LockIdle.isScreenOff(intent?.action) -> applyLockIdle(lockIdle.screenOff())
+                LockIdle.isScreenOn(intent?.action) -> applyLockIdle(lockIdle.screenOn(SystemClock.uptimeMillis()))
                 LockScreen.isBatteryAction(intent?.action) -> refreshLockBattery()
                 LockScreen.isTimeAction(intent?.action) -> refreshLockClock()
             }
         }
     }
+    private val lockIdle = LockIdle()
+    private var keepScreenOnWanted = true
+    private var stayOnToRestore: String? = null
+    private val lockIdleRunnable = Runnable {
+        if (isDestroyed || lockOverlay == null) return@Runnable
+        applyLockIdle(lockIdle.alarm(SystemClock.uptimeMillis()))
+    }
+    private val lockSleepRunnable = Runnable {
+        if (isDestroyed || !lockIdle.sleepPending) return@Runnable
+        android.util.Log.i("MainActivity", "Lock cover idle: turning the screen off")
+        val ok = KioskPolicy.sleepScreen(this)
+        if (!ok) android.util.Log.w("MainActivity", "Lock cover idle: this device cannot turn the screen off")
+        applyLockIdle(lockIdle.sleepResult(ok))
+    }
     private val lockListeners = LockScreenListeners(
         register = {
             val filter = IntentFilter()
-            LockScreen.broadcastActions().forEach { filter.addAction(it) }
+            LockIdle.coverBroadcastActions().forEach { filter.addAction(it) }
             ContextCompat.registerReceiver(this, lockScreenReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         },
         unregister = {
@@ -182,6 +201,17 @@ class MainActivity : AppCompatActivity() {
         webView.onResume()
         bridge.onResume()
         refreshAppsButton()
+        if (lockOverlay != null) {
+            val now = SystemClock.uptimeMillis()
+            if (isScreenInteractive() && (!lockIdle.screenOn || lockIdle.asleep)) {
+                applyLockIdle(lockIdle.screenOn(now))
+            }
+            if (lockIdle.held) applyLockIdle(lockIdle.resumed(now))
+            else {
+                refreshLockClock()
+                refreshLockBattery()
+            }
+        }
     }
 
     // --- allowed apps launcher ---
@@ -286,6 +316,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        // Another screen (parent PIN, settings) is in front. Don't sleep behind it.
+        // lockNow also pauses us while the screen is still reported interactive; that pending
+        // sleep must not be cancelled, or the screen would stay on.
+        if (lockOverlay != null && isScreenInteractive() && !lockIdle.sleepPending) {
+            applyLockIdle(lockIdle.paused())
+        }
         inForeground = false
         if (::webView.isInitialized) {
             webView.onPause()
@@ -324,6 +360,7 @@ class MainActivity : AppCompatActivity() {
         if (ev.actionMasked == MotionEvent.ACTION_DOWN && ::cornerTaps.isInitialized) {
             cornerTaps.onDown(ev.x, ev.y, window.decorView.height)
         }
+        if (lockOverlay != null) applyLockIdle(lockIdle.touch(SystemClock.uptimeMillis()))
         return super.dispatchTouchEvent(ev)
     }
 
@@ -339,7 +376,10 @@ class MainActivity : AppCompatActivity() {
      * Full-screen lock cover while the device doc's policy.locked is true: local time, date, battery,
      * then "This device is locked", on the same navy background. It swallows touches, but the
      * parent-menu corner taps are seen first in [dispatchTouchEvent], so the PIN still works.
-     * Time and battery broadcasts are registered only while the cover is up.
+     * Time and battery broadcasts stay registered for the life of the cover, including while the
+     * screen is off, and the clock is refreshed when the screen comes back.
+     * After 22 seconds with no touches the screen actually turns off. The power button wakes it
+     * back to this cover. Tap-to-wake is not turned on by the app.
      */
     fun updateLockOverlay() {
         if (!::root.isInitialized) return
@@ -355,7 +395,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showLockOverlay() {
-        if (lockOverlay == null) {
+        val first = lockOverlay == null
+        if (first) {
+            lockIdle.noteScreen(isScreenInteractive())
             val d = resources.displayMetrics.density
             fun dp(v: Int) = (v * d).toInt()
             val clock = android.widget.TextView(this).apply {
@@ -412,9 +454,11 @@ class MainActivity : AppCompatActivity() {
         refreshLockBattery()
         lockListeners.onShown()
         lockOverlay?.bringToFront()
+        applyLockIdle(lockIdle.coverShown(SystemClock.uptimeMillis()))
     }
 
     private fun removeLockOverlay() {
+        applyLockIdle(lockIdle.coverHidden())
         try {
             lockListeners.onHidden()
         } catch (e: Exception) {
@@ -427,6 +471,7 @@ class MainActivity : AppCompatActivity() {
         lockDate = null
         lockBattery = null
         if (::root.isInitialized && overlay.parent === root) root.removeView(overlay)
+        syncKeepScreenOn()
     }
 
     /** Device-local clock and date. 12-hour devices use h:mm; 24-hour devices use HH:mm. */
@@ -440,6 +485,55 @@ class MainActivity : AppCompatActivity() {
     private fun refreshLockBattery() {
         val line = LockScreen.batteryLine(DeviceInfo.battery(this))
         if (lockBattery?.text?.toString() != line) lockBattery?.text = line
+    }
+
+    /** Page preference from kiosk.setKeepScreenOn. The lock cover overrides it only while that cover is up. */
+    fun setKeepScreenOnWanted(on: Boolean): Boolean {
+        keepScreenOnWanted = on
+        syncKeepScreenOn()
+        return on
+    }
+
+    fun parentDialogShown() {
+        if (isDestroyed) return
+        applyLockIdle(lockIdle.dialogOpened())
+    }
+
+    fun parentDialogHidden() {
+        if (isDestroyed) return
+        applyLockIdle(lockIdle.dialogClosed(SystemClock.uptimeMillis()))
+    }
+
+    private fun isScreenInteractive(): Boolean =
+        getSystemService(PowerManager::class.java).isInteractive
+
+    private fun applyLockIdle(effect: LockIdle.Effect) {
+        if (effect.turnScreenOff && stayOnToRestore == null) {
+            stayOnToRestore = KioskPolicy.suspendStayOnWhilePluggedIn(this)
+        }
+        if (effect.restorePluggedStayOn) restoreStayOn()
+        if (effect.refreshClock && lockOverlay != null) {
+            refreshLockClock()
+            refreshLockBattery()
+        }
+        syncKeepScreenOn()
+        handler.removeCallbacks(lockIdleRunnable)
+        if (!effect.turnScreenOff) handler.removeCallbacks(lockSleepRunnable)
+        if (effect.turnScreenOff && !isDestroyed) handler.post(lockSleepRunnable)
+        val delay = effect.nextDelayMs
+        if (delay != null && !isDestroyed && lockOverlay != null) handler.postDelayed(lockIdleRunnable, delay)
+    }
+
+    private fun syncKeepScreenOn() {
+        if (isDestroyed) return
+        val flag = WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        if (lockIdle.windowShouldStayOn(keepScreenOnWanted)) window.addFlags(flag) else window.clearFlags(flag)
+    }
+
+    private fun restoreStayOn() {
+        val value = stayOnToRestore ?: return
+        stayOnToRestore = null
+        KioskPolicy.restoreStayOnWhilePluggedIn(this, value)
     }
 
     fun goHome() {

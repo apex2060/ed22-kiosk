@@ -77,9 +77,7 @@ object KioskPolicy {
         safely("status bar") { dpm.setStatusBarDisabled(admin, true) }
         RESTRICTIONS.forEach { r -> safely(r) { dpm.addUserRestriction(admin, r) } }
         safely("stay on while plugged in") {
-            val all = BatteryManager.BATTERY_PLUGGED_AC or BatteryManager.BATTERY_PLUGGED_USB or
-                BatteryManager.BATTERY_PLUGGED_WIRELESS
-            dpm.setGlobalSetting(admin, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, all.toString())
+            dpm.setGlobalSetting(admin, Settings.Global.STAY_ON_WHILE_PLUGGED_IN, stayOnWhilePluggedInValue())
         }
         // Automatic date, time and time zone, so the allowed-apps rules can't be dodged by changing the clock.
         if (Build.VERSION.SDK_INT >= 30) {
@@ -143,6 +141,63 @@ object KioskPolicy {
         if (!isDeviceOwner(ctx)) return false
         dpm(ctx).reboot(admin(ctx))
         return true
+    }
+
+    /** The value [apply] writes for [Settings.Global.STAY_ON_WHILE_PLUGGED_IN] (AC, USB, and wireless). */
+    fun stayOnWhilePluggedInValue(): String {
+        val all = BatteryManager.BATTERY_PLUGGED_AC or BatteryManager.BATTERY_PLUGGED_USB or
+            BatteryManager.BATTERY_PLUGGED_WIRELESS
+        return all.toString()
+    }
+
+    /**
+     * Clears stay-on-while-plugged so [sleepScreen] is not woken again by the charger.
+     * Returns the previous value for [restoreStayOnWhilePluggedIn], or null if nothing was changed.
+     * The unlocked kiosk calls apply() / restore, so this is not left at 0.
+     */
+    fun suspendStayOnWhilePluggedIn(ctx: Context): String? {
+        if (!isDeviceOwner(ctx)) return null
+        val key = Settings.Global.STAY_ON_WHILE_PLUGGED_IN
+        val previous = Settings.Global.getString(ctx.contentResolver, key)
+        val restore = if (previous.isNullOrEmpty()) stayOnWhilePluggedInValue() else previous
+        if (restore == "0") return null
+        return try {
+            dpm(ctx).setGlobalSetting(admin(ctx), key, "0")
+            restore
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not suspend stay-on-while-plugged", e)
+            null
+        }
+    }
+
+    fun restoreStayOnWhilePluggedIn(ctx: Context, value: String) {
+        if (!isDeviceOwner(ctx) || value.isEmpty()) return
+        try {
+            dpm(ctx).setGlobalSetting(admin(ctx), Settings.Global.STAY_ON_WHILE_PLUGGED_IN, value)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not restore stay-on-while-plugged", e)
+        }
+    }
+
+    /**
+     * Turns the screen off. Device owner only; [android.app.admin.DeviceAdminReceiver] already
+     * requests force-lock. No lock flags are passed, and the keyguard is not changed, so a wake
+     * does not skip the kiosk lock cover or ask for a credential the kiosk disabled.
+     * `PowerManager.goToSleep` is not used: that permission is not granted to a device-owner app.
+     * Returns false when this process cannot sleep the screen (there is no fake black cover).
+     */
+    fun sleepScreen(ctx: Context): Boolean {
+        if (!isDeviceOwner(ctx)) return false
+        return try {
+            dpm(ctx).lockNow()
+            true
+        } catch (e: SecurityException) {
+            Log.w(TAG, "lockNow was not allowed", e)
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "lockNow failed", e)
+            false
+        }
     }
 
     private inline fun safely(what: String, block: () -> Unit) {
