@@ -3,8 +3,12 @@ package org.ed22.kiosk
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.text.format.DateFormat
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
@@ -35,6 +39,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
+import java.time.ZonedDateTime
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -58,6 +64,32 @@ class MainActivity : AppCompatActivity() {
     private var hasFocus = false
     private val handler = Handler(Looper.getMainLooper())
     private var lockOverlay: View? = null
+    private var lockClock: android.widget.TextView? = null
+    private var lockDate: android.widget.TextView? = null
+    private var lockBattery: android.widget.TextView? = null
+    private val lockScreenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (lockOverlay == null || isDestroyed) return
+            when {
+                LockScreen.isBatteryAction(intent?.action) -> refreshLockBattery()
+                LockScreen.isTimeAction(intent?.action) -> refreshLockClock()
+            }
+        }
+    }
+    private val lockListeners = LockScreenListeners(
+        register = {
+            val filter = IntentFilter()
+            LockScreen.broadcastActions().forEach { filter.addAction(it) }
+            ContextCompat.registerReceiver(this, lockScreenReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        },
+        unregister = {
+            try {
+                unregisterReceiver(lockScreenReceiver)
+            } catch (e: IllegalArgumentException) {
+                // Already unregistered (unlock raced with destruction).
+            }
+        },
+    )
     private val policyListener: (org.json.JSONObject) -> Unit = { updateLockOverlay(); refreshAppsButton() }
 
     private var appsButton: android.widget.TextView? = null
@@ -265,6 +297,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         if (current === this) current = null
         DeviceSync.removeListener(policyListener)
+        removeLockOverlay()
         closePopup()
         if (::webView.isInitialized) {
             bridge.destroy()
@@ -303,31 +336,110 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Full-screen "locked" cover while the device doc's policy.locked is true. It swallows touches, but
-     * the parent-menu corner taps are seen first in [dispatchTouchEvent], so the PIN still works.
+     * Full-screen lock cover while the device doc's policy.locked is true: local time, date, battery,
+     * then "This device is locked", on the same navy background. It swallows touches, but the
+     * parent-menu corner taps are seen first in [dispatchTouchEvent], so the PIN still works.
+     * Time and battery broadcasts are registered only while the cover is up.
      */
     fun updateLockOverlay() {
         if (!::root.isInitialized) return
-        val locked = DeviceSync.policy(this).optBoolean("locked", false)
-        if (!locked) {
-            lockOverlay?.let { root.removeView(it) }
-            lockOverlay = null
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post { if (!isDestroyed) updateLockOverlay() }
             return
         }
-        val overlay = lockOverlay ?: android.widget.TextView(this).apply {
-            text = "This device is locked"
-            textSize = 28f
-            gravity = android.view.Gravity.CENTER
-            setTextColor(android.graphics.Color.WHITE)
-            setBackgroundColor(0xFF1F2A44.toInt())
-            isClickable = true
-            isFocusable = true
-            setOnTouchListener { _, _ -> true }
-        }.also {
-            root.addView(it, FrameLayout.LayoutParams(MATCH, MATCH))
-            lockOverlay = it
+        if (isDestroyed || !DeviceSync.policy(this).optBoolean("locked", false)) {
+            removeLockOverlay()
+            return
         }
-        overlay.bringToFront()
+        showLockOverlay()
+    }
+
+    private fun showLockOverlay() {
+        if (lockOverlay == null) {
+            val d = resources.displayMetrics.density
+            fun dp(v: Int) = (v * d).toInt()
+            val clock = android.widget.TextView(this).apply {
+                textSize = LockScreen.CLOCK_TEXT_SP
+                setTextColor(android.graphics.Color.WHITE)
+                gravity = android.view.Gravity.CENTER
+                includeFontPadding = false
+                typeface = android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL)
+            }
+            val date = android.widget.TextView(this).apply {
+                textSize = 20f
+                setTextColor(android.graphics.Color.WHITE)
+                gravity = android.view.Gravity.CENTER
+            }
+            val battery = android.widget.TextView(this).apply {
+                textSize = 20f
+                setTextColor(android.graphics.Color.WHITE)
+                gravity = android.view.Gravity.CENTER
+            }
+            val message = android.widget.TextView(this).apply {
+                text = LockScreen.LOCKED_MESSAGE
+                textSize = 28f
+                setTextColor(android.graphics.Color.WHITE)
+                gravity = android.view.Gravity.CENTER
+            }
+            val column = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                addView(clock, android.widget.LinearLayout.LayoutParams(MATCH, WRAP))
+                addView(date, android.widget.LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(6) })
+                addView(battery, android.widget.LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(14) })
+                addView(message, android.widget.LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(28) })
+            }
+            val overlay = android.widget.FrameLayout(this).apply {
+                setBackgroundColor(LockScreen.backgroundColor)
+                isClickable = true
+                isFocusable = true
+                // Swallow touches so the page underneath cannot be used. Corner taps are counted
+                // earlier, in dispatchTouchEvent, and are not affected by this.
+                setOnTouchListener { _, _ -> true }
+                addView(column, FrameLayout.LayoutParams(MATCH, WRAP, android.view.Gravity.CENTER).apply {
+                    val side = dp(24)
+                    leftMargin = side
+                    rightMargin = side
+                })
+            }
+            lockClock = clock
+            lockDate = date
+            lockBattery = battery
+            lockOverlay = overlay
+            root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
+        }
+        refreshLockClock()
+        refreshLockBattery()
+        lockListeners.onShown()
+        lockOverlay?.bringToFront()
+    }
+
+    private fun removeLockOverlay() {
+        try {
+            lockListeners.onHidden()
+        } catch (e: Exception) {
+            // Stay registered so a later removal can retry. Still take the cover down.
+            android.util.Log.w("MainActivity", "lock screen unregister", e)
+        }
+        val overlay = lockOverlay ?: return
+        lockOverlay = null
+        lockClock = null
+        lockDate = null
+        lockBattery = null
+        if (::root.isInitialized && overlay.parent === root) root.removeView(overlay)
+    }
+
+    /** Device-local clock and date. 12-hour devices use h:mm; 24-hour devices use HH:mm. */
+    private fun refreshLockClock() {
+        val now = ZonedDateTime.now()
+        val locale = Locale.getDefault()
+        lockClock?.text = LockScreen.clock(now.toLocalTime(), !DateFormat.is24HourFormat(this), locale)
+        lockDate?.text = LockScreen.date(now.toLocalDate(), locale)
+    }
+
+    private fun refreshLockBattery() {
+        val line = LockScreen.batteryLine(DeviceInfo.battery(this))
+        if (lockBattery?.text?.toString() != line) lockBattery?.text = line
     }
 
     fun goHome() {
@@ -592,3 +704,4 @@ class MainActivity : AppCompatActivity() {
 }
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
