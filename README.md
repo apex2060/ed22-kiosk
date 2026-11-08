@@ -102,6 +102,7 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 | Option | What it does |
 | --- | --- |
 | Exit kiosk mode | Unlocks the device and goes to the normal home screen. Opening Little Explorer again, or restarting, locks it again. |
+| Wi-Fi | Joins or turns Wi-Fi on from inside the kiosk. Shown only after the parent PIN. |
 | Open Wi-Fi settings | Exits kiosk mode and opens Wi-Fi settings. |
 | Reload start page | Goes back to https://us.ed22.org/mobile. |
 | Change PIN | Sets a new parent PIN. |
@@ -415,9 +416,10 @@ policy: {
   (device-owner `lockNow`, not a black overlay), including while charging. The power button wakes
   back to that same lock screen. Tap-to-wake is only whatever the tablet already does; the app
   cannot turn it on. Parent-menu corner taps and the PIN still work, including after wake, and the
-  screen is not put to sleep while a parent dialog or the lock-screen Wi-Fi panel is open. The Wi-Fi
-  row shows the connection and can join a network without opening Android settings or unlocking the
-  device. Unlocked, the screen stays as before
+  screen is not put to sleep while a parent dialog is open. The Wi-Fi row opens a status box (it
+  does not turn the radio on or join a network). That box stays on the 5 second idle timer. Its
+  only button, Parent Menu, asks for the existing parent PIN and opens the parent menu only when
+  that PIN matches. Unlocked, the screen stays as before
   (including staying on while plugged in).
 - **`command`**: runs once per `id` (the last handled id is remembered on the device, including
   across sign-outs). `reboot` needs device owner. Note: a command that is already in the doc when

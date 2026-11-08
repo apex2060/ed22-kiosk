@@ -137,6 +137,49 @@ fun quoteWifi(value: String): String? {
     return "\"$value\""
 }
 
+/** The only control on the lock-screen Wi-Fi information box. */
+const val PARENT_MENU_BUTTON = "Parent Menu"
+
+fun wifiInfoActions(): List<String> = listOf(PARENT_MENU_BUTTON)
+
+/**
+ * Result of asking for the parent menu. The menu itself opens only for [Ok].
+ * The check is the on-device PIN store, so it does not depend on being online.
+ */
+enum class ParentPinResult { Missing, Lockout, Cancel, Wrong, Ok }
+
+/**
+ * True only when the stored PIN matched. There is no default PIN.
+ * Connectivity is not an argument: the hash is on the device, so this works offline.
+ */
+fun parentMenuGranted(result: ParentPinResult): Boolean = result == ParentPinResult.Ok
+
+/** No dialog when there is no stored PIN or the lockout is active. Null means ask for the PIN. */
+fun parentPromptKind(hasPin: Boolean, lockoutRemainingMs: Long): ParentPinResult? = when {
+    !hasPin -> ParentPinResult.Missing
+    lockoutRemainingMs > 0 -> ParentPinResult.Lockout
+    else -> null
+}
+
+/** Read-only lines. A missing name stays "Name unavailable"; it is not replaced. */
+fun infoText(indicator: WifiIndicator): String {
+    val status = when (indicator.link) {
+        WifiLink.Off -> "Off"
+        WifiLink.Disconnected -> "Disconnected"
+        WifiLink.Connecting -> "Connecting"
+        WifiLink.Connected -> "Connected"
+        WifiLink.NoInternet -> "Connected, no internet"
+    }
+    val network = indicator.ssid ?: "Name unavailable"
+    return "${indicator.label()}\nStatus: $status\nNetwork: $network"
+}
+
+/**
+ * The information box does not pause idle sleep. [deadline] is the countdown already running
+ * after the tap that opened it. PIN and parent dialogs pause separately.
+ */
+fun deadlineWhileWifiInfoShown(deadline: Long?): Long? = deadline
+
 object LockWifi {
     const val ACTION_WIFI_STATE = "android.net.wifi.WIFI_STATE_CHANGED"
     const val ACTION_NETWORK_STATE = "android.net.wifi.STATE_CHANGE"

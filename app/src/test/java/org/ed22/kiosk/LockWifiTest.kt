@@ -111,19 +111,62 @@ class LockWifiTest {
     }
 
     @Test
-    fun wifiPanelPausesTheFiveSecondTimerUntilItCloses() {
+    fun infoBoxHasOnlyTheParentMenuButton() {
+        assertEquals(listOf("Parent Menu"), wifiInfoActions())
+        val forbidden = listOf("Close", "Refresh", "Reconnect", "Turn Wi-Fi on", "Turn Wi-Fi off", "Join", "Password")
+        assertTrue(forbidden.none { it in wifiInfoActions() })
+    }
+
+    @Test
+    fun pinFailCancelAndMissingPinDoNotOpenTheParentMenu() {
+        assertEquals(ParentPinResult.Missing, parentPromptKind(hasPin = false, lockoutRemainingMs = 0))
+        assertEquals(ParentPinResult.Lockout, parentPromptKind(hasPin = true, lockoutRemainingMs = 1_000))
+        assertNull(parentPromptKind(hasPin = true, lockoutRemainingMs = 0))
+        assertFalse(parentMenuGranted(ParentPinResult.Missing))
+        assertFalse(parentMenuGranted(ParentPinResult.Lockout))
+        assertFalse(parentMenuGranted(ParentPinResult.Cancel))
+        assertFalse(parentMenuGranted(ParentPinResult.Wrong))
+        assertTrue(parentMenuGranted(ParentPinResult.Ok))
+    }
+
+    @Test
+    fun infoTextRefreshesFromTheLiveSnapshotAndOmitsUnknownNames() {
+        val connected = infoText(indicatorOf(snap(enabled = true, onWifi = true, validated = true, ssid = "Cafe")))
+        assertTrue(connected.startsWith("Cafe"))
+        assertTrue(connected.contains("Status: Connected"))
+        assertTrue(connected.contains("Network: Cafe"))
+        val unknown = infoText(indicatorOf(snap(enabled = true, onWifi = true, validated = true, ssid = "<unknown ssid>")))
+        assertTrue(unknown.contains("Network: Name unavailable"))
+        assertFalse(unknown.contains("unknown ssid", ignoreCase = true))
+        val off = infoText(indicatorOf(snap(enabled = false, ssid = "Cafe")))
+        assertTrue(off.startsWith("Wi-Fi off"))
+        assertTrue(off.contains("Network: Name unavailable"))
+    }
+
+    @Test
+    fun readOnlyWifiInfoDoesNotPauseTheFiveSecondSleep() {
         val idle = LockIdle()
         idle.coverShown(0)
-        idle.touch(4_000)
-        assertEquals(9_000L, idle.deadline())
+        idle.touch(1_000)
+        assertEquals(6_000L, idle.deadline())
+        assertEquals(6_000L, deadlineWhileWifiInfoShown(idle.deadline()))
+        assertFalse(idle.alarm(5_999).turnScreenOff)
+        assertTrue(idle.alarm(6_000).turnScreenOff)
+    }
+
+    @Test
+    fun parentPinDialogStillPausesSleepUntilItCloses() {
+        val idle = LockIdle()
+        idle.coverShown(0)
+        idle.touch(1_000)
         idle.dialogOpened()
         assertNull(idle.deadline())
-        assertFalse(idle.alarm(9_000).turnScreenOff)
-        val closed = idle.dialogClosed(20_000)
-        assertEquals(5_000L, closed.nextDelayMs)
-        assertEquals(25_000L, idle.deadline())
-        assertFalse(idle.alarm(24_999).turnScreenOff)
-        assertTrue(idle.alarm(25_000).turnScreenOff)
+        assertFalse(idle.alarm(6_000).turnScreenOff)
+        val cancelled = idle.dialogClosed(4_000)
+        assertEquals(5_000L, cancelled.nextDelayMs)
+        assertEquals(9_000L, idle.deadline())
+        assertFalse(idle.alarm(8_999).turnScreenOff)
+        assertTrue(idle.alarm(9_000).turnScreenOff)
     }
 
     @Test
