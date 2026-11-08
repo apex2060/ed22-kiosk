@@ -43,8 +43,75 @@ object LockWifiDialog {
         current?.dismiss()
     }
 
+    /** Read-only status. Does not pause the idle timer and has no Wi-Fi controls. */
     fun show(activity: MainActivity) {
         if (activity.isDestroyed || current?.isShowing == true) return
+        val density = activity.resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+        val status = TextView(activity).apply {
+            textSize = 18f
+            setPadding(dp(24), dp(12), dp(24), dp(8))
+        }
+        val parent = Button(activity).apply {
+            text = PARENT_MENU_BUTTON
+            isAllCaps = false
+            transformationMethod = null
+            setOnClickListener {
+                current?.dismiss()
+                ParentMenu.prompt(activity)
+            }
+        }
+        fun reload() {
+            if (activity.isDestroyed) return
+            status.text = infoText(indicatorOf(WifiControl.snapshot(activity)))
+        }
+        val body = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            addView(status)
+            addView(parent, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                leftMargin = dp(16)
+                rightMargin = dp(16)
+                bottomMargin = dp(12)
+            })
+        }
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Wi-Fi")
+            .setView(body)
+            .setCancelable(true)
+            .create()
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.setOnDismissListener {
+            unregisterScan(activity)
+            if (current === dialog) current = null
+            activity.hideSystemUi()
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (LockWifi.isWifiAction(intent?.action)) reload()
+            }
+        }
+        scanReceiver = receiver
+        try {
+            ContextCompat.registerReceiver(
+                activity,
+                receiver,
+                IntentFilter().apply { LockWifi.broadcastActions().forEach { addAction(it) } },
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            current = dialog
+            reload()
+            dialog.show()
+        } catch (e: Exception) {
+            unregisterScan(activity)
+            current = null
+            throw e
+        }
+    }
+
+    /** Join and radio controls. Only the unlocked parent menu calls this. */
+    fun showParentControls(activity: MainActivity) {
+        if (activity.isDestroyed) return
         activity.parentDialogShown()
         try {
             showPanel(activity)

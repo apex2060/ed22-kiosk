@@ -16,10 +16,17 @@ object ParentMenu {
     private const val PROMPT_TIMEOUT_MS = 30_000L
 
     fun prompt(activity: MainActivity) {
-        val locked = PinStore.lockoutRemainingMs(activity)
-        if (locked > 0) {
-            toast(activity, "Too many wrong PINs. Try again in ${(locked + 999) / 1000} seconds.")
-            return
+        when (parentPromptKind(PinStore.hasPin(activity), PinStore.lockoutRemainingMs(activity))) {
+            ParentPinResult.Missing -> {
+                toast(activity, "No parent PIN is set.")
+                return
+            }
+            ParentPinResult.Lockout -> {
+                val locked = PinStore.lockoutRemainingMs(activity)
+                toast(activity, "Too many wrong PINs. Try again in ${(locked + 999) / 1000} seconds.")
+                return
+            }
+            else -> Unit
         }
         val input = EditText(activity).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
@@ -39,7 +46,7 @@ object ParentMenu {
                 when (PinStore.verify(activity, input.text.toString())) {
                     PinStore.Check.OK -> {
                         dialog.dismiss()
-                        showMenu(activity)
+                        if (parentMenuGranted(ParentPinResult.Ok)) showMenu(activity)
                     }
                     PinStore.Check.WRONG -> {
                         input.text.clear()
@@ -60,6 +67,7 @@ object ParentMenu {
     private fun showMenu(activity: MainActivity) {
         val items = arrayOf(
             "Exit kiosk mode",
+            "Wi-Fi",
             "Open Wi-Fi settings",
             "Reload start page",
             "Change PIN",
@@ -72,14 +80,15 @@ object ParentMenu {
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> exit(activity, null)
-                    1 -> exit(activity, Intent(Settings.ACTION_WIFI_SETTINGS))
-                    2 -> activity.goHome()
-                    3 -> activity.startActivity(
+                    1 -> LockWifiDialog.showParentControls(activity)
+                    2 -> exit(activity, Intent(Settings.ACTION_WIFI_SETTINGS))
+                    3 -> activity.goHome()
+                    4 -> activity.startActivity(
                         Intent(activity, PinSetupActivity::class.java).putExtra(PinSetupActivity.EXTRA_CHANGE, true)
                     )
-                    4 -> showUpdates(activity)
-                    5 -> showAccount(activity)
-                    6 -> confirmRemove(activity)
+                    5 -> showUpdates(activity)
+                    6 -> showAccount(activity)
+                    7 -> confirmRemove(activity)
                 }
             }
             .setNegativeButton("Close", null)
