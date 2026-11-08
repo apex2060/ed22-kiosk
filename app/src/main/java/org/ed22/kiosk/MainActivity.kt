@@ -378,7 +378,7 @@ class MainActivity : AppCompatActivity() {
      * parent-menu corner taps are seen first in [dispatchTouchEvent], so the PIN still works.
      * Time and battery broadcasts stay registered for the life of the cover, including while the
      * screen is off, and the clock is refreshed when the screen comes back.
-     * After 22 seconds with no touches the screen actually turns off. The power button wakes it
+     * After 5 seconds with no touches the screen actually turns off. The power button wakes it
      * back to this cover. Tap-to-wake is not turned on by the app.
      */
     fun updateLockOverlay() {

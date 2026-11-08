@@ -198,7 +198,7 @@ class LockIdle(
     }
 
     companion object {
-        const val IDLE_MS = 22_000L
+        const val IDLE_MS = 5_000L
 
         const val ACTION_SCREEN_OFF = "android.intent.action.SCREEN_OFF"
         const val ACTION_SCREEN_ON = "android.intent.action.SCREEN_ON"

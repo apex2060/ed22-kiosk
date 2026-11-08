@@ -411,7 +411,7 @@ policy: {
   or uninstalled. Without device owner, nothing is enforced and `status.policyNote` says so.
 - **`activeStudentId`** (top level of the doc, written by /mobile): see [the active child](#allowed-apps-rules).
 - **`locked: true`**: covers the page with the native lock screen (local time, date, battery,
-  then "This device is locked"). After 22 seconds with no touches the screen turns off for real
+  then "This device is locked"). After 5 seconds with no touches the screen turns off for real
   (device-owner `lockNow`, not a black overlay), including while charging. The power button wakes
   back to that same lock screen. Tap-to-wake is only whatever the tablet already does; the app
   cannot turn it on. Parent-menu corner taps and the PIN still work, including after wake, and the
