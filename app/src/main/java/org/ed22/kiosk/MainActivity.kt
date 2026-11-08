@@ -10,6 +10,10 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.text.format.DateFormat
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -69,15 +73,18 @@ class MainActivity : AppCompatActivity() {
     private var lockClock: android.widget.TextView? = null
     private var lockDate: android.widget.TextView? = null
     private var lockBattery: android.widget.TextView? = null
+    private var lockWifi: android.widget.TextView? = null
+    private var lockWifiCallback: ConnectivityManager.NetworkCallback? = null
     private val lockScreenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (lockOverlay == null || isDestroyed) return
             when {
-                // Screen off leaves the cover and its clock/battery receivers in place.
+                // Screen off leaves the cover and its clock/battery/Wi-Fi receivers in place.
                 LockIdle.isScreenOff(intent?.action) -> applyLockIdle(lockIdle.screenOff())
                 LockIdle.isScreenOn(intent?.action) -> applyLockIdle(lockIdle.screenOn(SystemClock.uptimeMillis()))
                 LockScreen.isBatteryAction(intent?.action) -> refreshLockBattery()
                 LockScreen.isTimeAction(intent?.action) -> refreshLockClock()
+                LockWifi.isWifiAction(intent?.action) -> refreshLockWifi()
             }
         }
     }
@@ -98,14 +105,36 @@ class MainActivity : AppCompatActivity() {
     private val lockListeners = LockScreenListeners(
         register = {
             val filter = IntentFilter()
-            LockIdle.coverBroadcastActions().forEach { filter.addAction(it) }
+            LockWifi.overlayBroadcasts().forEach { filter.addAction(it) }
             ContextCompat.registerReceiver(this, lockScreenReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) = refreshLockWifiOnMain()
+                override fun onLost(network: Network) = refreshLockWifiOnMain()
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = refreshLockWifiOnMain()
+            }
+            try {
+                val request = NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .build()
+                getSystemService(ConnectivityManager::class.java).registerNetworkCallback(request, callback)
+                lockWifiCallback = callback
+            } catch (e: RuntimeException) {
+                android.util.Log.w("MainActivity", "Wi-Fi status listener not available")
+            }
         },
         unregister = {
             try {
                 unregisterReceiver(lockScreenReceiver)
             } catch (e: IllegalArgumentException) {
                 // Already unregistered (unlock raced with destruction).
+            }
+            lockWifiCallback?.let { callback ->
+                try {
+                    getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback)
+                } catch (e: IllegalArgumentException) {
+                    // Already unregistered.
+                }
+                lockWifiCallback = null
             }
         },
     )
@@ -379,7 +408,8 @@ class MainActivity : AppCompatActivity() {
      * Time and battery broadcasts stay registered for the life of the cover, including while the
      * screen is off, and the clock is refreshed when the screen comes back.
      * After 5 seconds with no touches the screen actually turns off. The power button wakes it
-     * back to this cover. Tap-to-wake is not turned on by the app.
+     * back to this cover. Tap-to-wake is not turned on by the app. The Wi-Fi row joins a network
+     * in place and pauses that timer while its dialog is open.
      */
     fun updateLockOverlay() {
         if (!::root.isInitialized) return
@@ -423,12 +453,28 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(android.graphics.Color.WHITE)
                 gravity = android.view.Gravity.CENTER
             }
+            val wifi = android.widget.TextView(this).apply {
+                textSize = 18f
+                setTextColor(android.graphics.Color.WHITE)
+                gravity = android.view.Gravity.CENTER
+                isClickable = true
+                isFocusable = true
+                val pad = dp(14)
+                setPadding(pad, dp(8), pad, dp(8))
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = 100f * d
+                    setColor(0x33FFFFFF)
+                }
+                contentDescription = "Wi-Fi"
+                setOnClickListener { LockWifiDialog.show(this@MainActivity) }
+            }
             val column = android.widget.LinearLayout(this).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
                 gravity = android.view.Gravity.CENTER_HORIZONTAL
                 addView(clock, android.widget.LinearLayout.LayoutParams(MATCH, WRAP))
                 addView(date, android.widget.LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(6) })
                 addView(battery, android.widget.LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(14) })
+                addView(wifi, android.widget.LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(16) })
                 addView(message, android.widget.LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(28) })
             }
             val overlay = android.widget.FrameLayout(this).apply {
@@ -447,17 +493,20 @@ class MainActivity : AppCompatActivity() {
             lockClock = clock
             lockDate = date
             lockBattery = battery
+            lockWifi = wifi
             lockOverlay = overlay
             root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
         }
         refreshLockClock()
         refreshLockBattery()
+        refreshLockWifi()
         lockListeners.onShown()
         lockOverlay?.bringToFront()
         applyLockIdle(lockIdle.coverShown(SystemClock.uptimeMillis()))
     }
 
     private fun removeLockOverlay() {
+        LockWifiDialog.dismiss()
         applyLockIdle(lockIdle.coverHidden())
         try {
             lockListeners.onHidden()
@@ -470,6 +519,7 @@ class MainActivity : AppCompatActivity() {
         lockClock = null
         lockDate = null
         lockBattery = null
+        lockWifi = null
         if (::root.isInitialized && overlay.parent === root) root.removeView(overlay)
         syncKeepScreenOn()
     }
@@ -485,6 +535,20 @@ class MainActivity : AppCompatActivity() {
     private fun refreshLockBattery() {
         val line = LockScreen.batteryLine(DeviceInfo.battery(this))
         if (lockBattery?.text?.toString() != line) lockBattery?.text = line
+    }
+
+    private fun refreshLockWifiOnMain() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post { refreshLockWifiOnMain() }
+            return
+        }
+        if (isDestroyed || lockOverlay == null) return
+        refreshLockWifi()
+    }
+
+    private fun refreshLockWifi() {
+        val label = indicatorOf(WifiControl.snapshot(this)).label()
+        if (lockWifi?.text?.toString() != label) lockWifi?.text = label
     }
 
     /** Page preference from kiosk.setKeepScreenOn. The lock cover overrides it only while that cover is up. */
@@ -515,6 +579,7 @@ class MainActivity : AppCompatActivity() {
         if (effect.refreshClock && lockOverlay != null) {
             refreshLockClock()
             refreshLockBattery()
+            refreshLockWifi()
         }
         syncKeepScreenOn()
         handler.removeCallbacks(lockIdleRunnable)
