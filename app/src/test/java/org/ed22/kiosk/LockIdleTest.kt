@@ -9,34 +9,34 @@ import org.junit.Test
 
 /**
  * The lock-cover idle timer, without a device. Times are milliseconds on an injected clock.
- * 22_000 is the idle limit. Nothing here turns the screen off unless the cover is up,
+ * 5_000 is the idle limit. Nothing here turns the screen off unless the cover is up,
  * the screen is on, and no parent UI is in front.
  */
 class LockIdleTest {
     @Test
-    fun idleIsTwentyTwoSeconds() {
-        assertEquals(22_000L, LockIdle.IDLE_MS)
+    fun idleIsFiveSeconds() {
+        assertEquals(5_000L, LockIdle.IDLE_MS)
     }
 
     @Test
     fun coverCountsDownThenRequestsARealSleep() {
         val idle = LockIdle()
         val shown = idle.coverShown(0)
-        assertEquals(22_000L, shown.nextDelayMs)
+        assertEquals(5_000L, shown.nextDelayMs)
         assertFalse(shown.turnScreenOff)
-        assertEquals(22_000L, idle.deadline())
+        assertEquals(5_000L, idle.deadline())
 
-        val early = idle.alarm(21_999)
+        val early = idle.alarm(4_999)
         assertFalse(early.turnScreenOff)
         assertEquals(1L, early.nextDelayMs)
 
-        val due = idle.alarm(22_000)
+        val due = idle.alarm(5_000)
         assertTrue(due.turnScreenOff)
         assertTrue(idle.sleepPending)
         assertTrue(idle.stayOnSuspended)
         assertFalse(idle.windowShouldStayOn(wanted = true))
 
-        assertFalse(idle.alarm(22_000).turnScreenOff)
+        assertFalse(idle.alarm(5_000).turnScreenOff)
 
         val slept = idle.sleepResult(ok = true)
         assertFalse(slept.turnScreenOff)
@@ -52,26 +52,30 @@ class LockIdleTest {
     fun touchResetsTheDeadlineAndDoesNotDismissTheCover() {
         val idle = LockIdle()
         idle.coverShown(0)
-        val touch = idle.touch(21_000)
+        val touch = idle.touch(4_000)
         assertFalse(touch.turnScreenOff)
         assertTrue(idle.coverVisible)
-        assertEquals(43_000L, idle.deadline())
-        assertEquals(22_000L, touch.nextDelayMs)
+        assertEquals(9_000L, idle.deadline())
+        assertEquals(5_000L, touch.nextDelayMs)
 
-        assertFalse(idle.alarm(22_000).turnScreenOff)
-        assertEquals(21_000L, idle.alarm(22_000).nextDelayMs)
-        assertTrue(idle.alarm(43_000).turnScreenOff)
+        assertFalse(idle.alarm(5_000).turnScreenOff)
+        assertEquals(4_000L, idle.alarm(5_000).nextDelayMs)
+        val justBefore = idle.alarm(8_999)
+        assertFalse(justBefore.turnScreenOff)
+        assertEquals(1L, justBefore.nextDelayMs)
+        assertTrue(idle.alarm(9_000).turnScreenOff)
     }
 
     @Test
     fun showingTheCoverAgainDoesNotResetTheClock() {
         val idle = LockIdle()
         idle.coverShown(0)
-        val again = idle.coverShown(10_000)
-        assertEquals(12_000L, again.nextDelayMs)
-        assertEquals(22_000L, idle.deadline())
+        val again = idle.coverShown(2_000)
+        assertEquals(3_000L, again.nextDelayMs)
+        assertEquals(5_000L, idle.deadline())
         assertFalse(again.turnScreenOff)
-        assertTrue(idle.alarm(22_000).turnScreenOff)
+        assertFalse(idle.alarm(4_999).turnScreenOff)
+        assertTrue(idle.alarm(5_000).turnScreenOff)
     }
 
     @Test
@@ -81,7 +85,7 @@ class LockIdleTest {
         assertFalse(idle.windowShouldStayOn(wanted = false))
         listOf(
             idle.touch(1_000),
-            idle.alarm(22_000),
+            idle.alarm(5_000),
             idle.screenOff(),
             idle.screenOn(30_000),
             idle.dialogOpened(),
@@ -114,17 +118,19 @@ class LockIdleTest {
         assertFalse(on.turnScreenOff)
         assertTrue(on.restorePluggedStayOn)
         assertTrue(on.refreshClock)
-        assertEquals(22_000L, on.nextDelayMs)
-        assertEquals(52_000L, idle.deadline())
+        assertEquals(5_000L, on.nextDelayMs)
+        assertEquals(35_000L, idle.deadline())
         assertFalse(idle.asleep)
         assertTrue(idle.windowShouldStayOn(wanted = false))
 
-        val again = idle.screenOn(35_000)
+        val again = idle.screenOn(32_000)
         assertFalse(again.turnScreenOff)
         assertFalse(again.restorePluggedStayOn)
         assertFalse(again.refreshClock)
-        assertEquals(52_000L, idle.deadline())
-        assertFalse(idle.alarm(35_000).turnScreenOff)
+        assertEquals(35_000L, idle.deadline())
+        val early = idle.alarm(34_999)
+        assertFalse(early.turnScreenOff)
+        assertEquals(1L, early.nextDelayMs)
     }
 
     @Test
@@ -132,12 +138,15 @@ class LockIdleTest {
         val idle = LockIdle()
         idle.coverShown(0)
         idle.screenOff()
-        assertFalse(idle.alarm(22_000).turnScreenOff)
+        assertFalse(idle.alarm(5_000).turnScreenOff)
         assertNull(idle.deadline())
         val on = idle.screenOn(40_000)
-        assertEquals(22_000L, on.nextDelayMs)
+        assertEquals(5_000L, on.nextDelayMs)
+        assertEquals(45_000L, idle.deadline())
         assertTrue(on.refreshClock)
         assertFalse(on.turnScreenOff)
+        assertFalse(idle.alarm(44_999).turnScreenOff)
+        assertTrue(idle.alarm(45_000).turnScreenOff)
     }
 
     @Test
@@ -148,10 +157,13 @@ class LockIdleTest {
         assertFalse(shown.turnScreenOff)
         assertNull(shown.nextDelayMs)
         assertTrue(idle.coverVisible)
-        val on = idle.screenOn(5_000)
+        val on = idle.screenOn(1_000)
         assertFalse(on.turnScreenOff)
         assertTrue(on.refreshClock)
-        assertEquals(22_000L, on.nextDelayMs)
+        assertEquals(5_000L, on.nextDelayMs)
+        assertEquals(6_000L, idle.deadline())
+        assertFalse(idle.alarm(5_999).turnScreenOff)
+        assertTrue(idle.alarm(6_000).turnScreenOff)
     }
 
     @Test
@@ -161,22 +173,24 @@ class LockIdleTest {
         val opened = idle.dialogOpened()
         assertFalse(opened.turnScreenOff)
         assertNull(idle.deadline())
-        assertFalse(idle.alarm(22_000).turnScreenOff)
-        assertFalse(idle.touch(20_000).turnScreenOff)
+        assertFalse(idle.alarm(5_000).turnScreenOff)
+        assertFalse(idle.touch(4_000).turnScreenOff)
         assertNull(idle.deadline())
 
-        val closed = idle.dialogClosed(25_000)
-        assertEquals(22_000L, closed.nextDelayMs)
-        assertEquals(47_000L, idle.deadline())
-        assertFalse(idle.alarm(46_999).turnScreenOff)
-        assertTrue(idle.alarm(47_000).turnScreenOff)
+        val closed = idle.dialogClosed(8_000)
+        assertEquals(5_000L, closed.nextDelayMs)
+        assertEquals(13_000L, idle.deadline())
+        val early = idle.alarm(12_999)
+        assertFalse(early.turnScreenOff)
+        assertEquals(1L, early.nextDelayMs)
+        assertTrue(idle.alarm(13_000).turnScreenOff)
     }
 
     @Test
     fun dialogCancelsAPendingSleepAndRestoresStayOn() {
         val idle = LockIdle()
         idle.coverShown(0)
-        assertTrue(idle.alarm(22_000).turnScreenOff)
+        assertTrue(idle.alarm(5_000).turnScreenOff)
         val opened = idle.dialogOpened()
         assertFalse(idle.sleepPending)
         assertTrue(opened.restorePluggedStayOn)
@@ -190,14 +204,16 @@ class LockIdleTest {
     fun touchCancelsAPendingSleepWithoutLeavingTheCover() {
         val idle = LockIdle()
         idle.coverShown(0)
-        idle.alarm(22_000)
-        val touch = idle.touch(22_100)
+        idle.alarm(5_000)
+        val touch = idle.touch(5_100)
         assertFalse(idle.sleepPending)
         assertTrue(touch.restorePluggedStayOn)
         assertFalse(touch.turnScreenOff)
         assertTrue(idle.coverVisible)
-        assertEquals(44_100L, idle.deadline())
+        assertEquals(10_100L, idle.deadline())
         assertTrue(idle.windowShouldStayOn(wanted = true))
+        assertFalse(idle.alarm(10_099).turnScreenOff)
+        assertTrue(idle.alarm(10_100).turnScreenOff)
     }
 
     @Test
@@ -208,7 +224,7 @@ class LockIdleTest {
         assertFalse(paused.turnScreenOff)
         assertTrue(idle.held)
         assertNull(idle.deadline())
-        assertFalse(idle.alarm(22_000).turnScreenOff)
+        assertFalse(idle.alarm(5_000).turnScreenOff)
 
         idle.screenOff()
         val on = idle.screenOn(30_000)
@@ -219,7 +235,8 @@ class LockIdleTest {
         val resumed = idle.resumed(31_000)
         assertFalse(resumed.turnScreenOff)
         assertTrue(resumed.refreshClock)
-        assertEquals(22_000L, resumed.nextDelayMs)
+        assertEquals(5_000L, resumed.nextDelayMs)
+        assertEquals(36_000L, idle.deadline())
         assertFalse(idle.held)
     }
 
@@ -227,26 +244,29 @@ class LockIdleTest {
     fun resumeWhileAlreadyCountingDoesNotResetTheDeadline() {
         val idle = LockIdle()
         idle.coverShown(0)
-        val resumed = idle.resumed(5_000)
-        assertEquals(17_000L, resumed.nextDelayMs)
-        assertEquals(22_000L, idle.deadline())
+        val resumed = idle.resumed(2_000)
+        assertEquals(3_000L, resumed.nextDelayMs)
+        assertEquals(5_000L, idle.deadline())
         assertTrue(resumed.refreshClock)
         assertFalse(resumed.turnScreenOff)
+        assertFalse(idle.alarm(4_999).turnScreenOff)
+        assertTrue(idle.alarm(5_000).turnScreenOff)
     }
 
     @Test
     fun pauseCancelsAPendingSleep() {
         val idle = LockIdle()
         idle.coverShown(0)
-        idle.alarm(22_000)
+        idle.alarm(5_000)
         val paused = idle.paused()
         assertFalse(idle.sleepPending)
         assertTrue(idle.held)
         assertTrue(paused.restorePluggedStayOn)
-        assertFalse(idle.alarm(22_000).turnScreenOff)
-        val resumed = idle.resumed(23_000)
+        assertFalse(idle.alarm(5_000).turnScreenOff)
+        val resumed = idle.resumed(6_000)
         assertFalse(resumed.turnScreenOff)
-        assertEquals(22_000L, resumed.nextDelayMs)
+        assertEquals(5_000L, resumed.nextDelayMs)
+        assertEquals(11_000L, idle.deadline())
     }
 
     @Test
@@ -257,11 +277,11 @@ class LockIdleTest {
         assertFalse(hidden.restorePluggedStayOn)
         assertFalse(hidden.turnScreenOff)
         assertFalse(counting.coverVisible)
-        assertFalse(counting.alarm(22_000).turnScreenOff)
+        assertFalse(counting.alarm(5_000).turnScreenOff)
 
         val sleeping = LockIdle()
         sleeping.coverShown(0)
-        sleeping.alarm(22_000)
+        sleeping.alarm(5_000)
         val destroyed = sleeping.destroy()
         assertTrue(destroyed.restorePluggedStayOn)
         assertFalse(sleeping.sleepPending)
@@ -276,7 +296,7 @@ class LockIdleTest {
     fun failedSleepDoesNotLoopOrPretendTheScreenIsOff() {
         val idle = LockIdle()
         idle.coverShown(0)
-        idle.alarm(22_000)
+        idle.alarm(5_000)
         val failed = idle.sleepResult(ok = false)
         assertTrue(failed.restorePluggedStayOn)
         assertFalse(failed.turnScreenOff)
@@ -289,7 +309,8 @@ class LockIdleTest {
 
         idle.coverHidden()
         idle.coverShown(60_000)
-        assertTrue(idle.alarm(82_000).turnScreenOff)
+        assertFalse(idle.alarm(64_999).turnScreenOff)
+        assertTrue(idle.alarm(65_000).turnScreenOff)
     }
 
     @Test
@@ -316,14 +337,15 @@ class LockIdleTest {
     fun recreatedInstanceStartsUnregistered() {
         val first = LockIdle()
         first.coverShown(0)
-        first.alarm(22_000)
+        first.alarm(5_000)
         first.sleepResult(ok = true)
         val second = LockIdle()
         assertFalse(second.coverVisible)
         assertFalse(second.asleep)
         assertFalse(second.sleepPending)
         val shown = second.coverShown(100_000)
-        assertEquals(22_000L, shown.nextDelayMs)
+        assertEquals(5_000L, shown.nextDelayMs)
+        assertEquals(105_000L, second.deadline())
         assertFalse(shown.turnScreenOff)
         first.destroy()
         assertFalse(first.alarm(200_000).turnScreenOff)
@@ -346,7 +368,7 @@ class LockIdleTest {
     private fun sleeping(): LockIdle {
         val idle = LockIdle()
         idle.coverShown(0)
-        assertTrue(idle.alarm(22_000).turnScreenOff)
+        assertTrue(idle.alarm(5_000).turnScreenOff)
         assertFalse(idle.sleepResult(ok = true).restorePluggedStayOn)
         return idle
     }
