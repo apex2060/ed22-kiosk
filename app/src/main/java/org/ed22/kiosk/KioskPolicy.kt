@@ -32,6 +32,8 @@ object KioskPolicy {
         add(Manifest.permission.ACCESS_COARSE_LOCATION)
         add(Manifest.permission.READ_PHONE_STATE)
         if (Build.VERSION.SDK_INT >= 29) add(Manifest.permission.ACTIVITY_RECOGNITION)
+        // Lets the lock screen list networks without turning location on. Not used to derive location.
+        if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.NEARBY_WIFI_DEVICES)
     }
 
     /** Apps the kiosk may hand off to without leaving lock task mode (the file picker for uploads). */
