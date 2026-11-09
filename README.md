@@ -416,10 +416,11 @@ policy: {
   (device-owner `lockNow`, not a black overlay), including while charging. The power button wakes
   back to that same lock screen. Tap-to-wake is only whatever the tablet already does; the app
   cannot turn it on. Parent-menu corner taps and the PIN still work, including after wake, and the
-  screen is not put to sleep while a parent dialog is open. The Wi-Fi row opens a status box (it
-  does not turn the radio on or join a network). That box stays on the 5 second idle timer. Its
-  only button, Parent Menu, asks for the existing parent PIN and opens the parent menu only when
-  that PIN matches. Unlocked, the screen stays as before
+  screen is not put to sleep while a parent dialog is open. The Wi-Fi row opens a status box. When
+  Wi-Fi is not on a network, that box also has Reconnect, which retries saved networks only (no
+  network list or password) and pauses the 5 second timer while that attempt runs. Parent Menu
+  asks for the existing parent PIN and opens the parent menu only when that PIN matches.
+  Unlocked, the screen stays as before
   (including staying on while plugged in).
 - **`command`**: runs once per `id` (the last handled id is remembered on the device, including
   across sign-outs). `reboot` needs device owner. Note: a command that is already in the doc when

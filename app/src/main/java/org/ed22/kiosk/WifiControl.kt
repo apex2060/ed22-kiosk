@@ -75,6 +75,24 @@ object WifiControl {
         }
     }
 
+    /**
+     * Turns the radio on when this process is allowed to, then asks Android to rejoin a saved
+     * network. Does not add, forget, or choose a network and does not take a password.
+     * Returns false when the radio is off and this app cannot turn it on (Android 10+ without device owner).
+     */
+    @Suppress("DEPRECATION", "MissingPermission")
+    fun reconnectSaved(ctx: Context): Boolean {
+        val wm = ctx.applicationContext.getSystemService(WifiManager::class.java)
+        val enabled = runCatching { wm.isWifiEnabled }.getOrDefault(false)
+        when (reconnectPlan(enabled, canChange(ctx))) {
+            ReconnectPlan.Blocked -> return false
+            ReconnectPlan.EnableThenReconnect -> if (!setEnabled(ctx, true)) return false
+            ReconnectPlan.ReconnectSaved -> Unit
+        }
+        if (canScan(ctx)) runCatching { wm.startScan() }
+        return if (canChange(ctx)) reconnect(ctx) || !enabled else true
+    }
+
     /** Saved networks plus scan results. Empty scans when permission is missing; that is not an error. */
     @Suppress("DEPRECATION", "MissingPermission")
     fun networks(ctx: Context): List<WifiNetwork> {

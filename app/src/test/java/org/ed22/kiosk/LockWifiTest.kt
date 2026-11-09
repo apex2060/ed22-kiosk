@@ -111,10 +111,67 @@ class LockWifiTest {
     }
 
     @Test
-    fun infoBoxHasOnlyTheParentMenuButton() {
-        assertEquals(listOf("Parent Menu"), wifiInfoActions())
-        val forbidden = listOf("Close", "Refresh", "Reconnect", "Turn Wi-Fi on", "Turn Wi-Fi off", "Join", "Password")
-        assertTrue(forbidden.none { it in wifiInfoActions() })
+    fun connectedInfoBoxStillHasOnlyParentMenu() {
+        val controls = wifiInfoControls(
+            indicatorOf(snap(enabled = true, onWifi = true, validated = true, ssid = "Cafe")),
+            attemptRunning = false,
+            failed = false,
+        )
+        assertEquals(listOf("Parent Menu"), controls.actions)
+        assertFalse(controls.reconnectEnabled)
+        assertFalse(controls.showProgress)
+        val forbidden = listOf("Close", "Refresh", "Turn Wi-Fi on", "Turn Wi-Fi off", "Join", "Password", "Forget")
+        assertTrue(forbidden.none { it in controls.actions })
+    }
+
+    @Test
+    fun disconnectedInfoBoxOffersReconnectBesideParentMenu() {
+        for (link in listOf(WifiLink.Off, WifiLink.Disconnected)) {
+            val controls = wifiInfoControls(WifiIndicator(link, null), attemptRunning = false, failed = false)
+            assertEquals(listOf("Reconnect", "Parent Menu"), controls.actions)
+            assertTrue(controls.reconnectEnabled)
+            assertFalse(controls.showProgress)
+            assertFalse(controls.actions.any { it == "Join" || it == "Password" || it == "Refresh" })
+        }
+        val trying = wifiInfoControls(WifiIndicator(WifiLink.Disconnected, null), attemptRunning = true, failed = false)
+        assertEquals(listOf("Reconnect", "Parent Menu"), trying.actions)
+        assertFalse(trying.reconnectEnabled)
+        assertTrue(trying.showProgress)
+        assertTrue(trying.detail.contains("Reconnecting…"))
+        val gaveUp = wifiInfoControls(WifiIndicator(WifiLink.Off, null), attemptRunning = false, failed = true)
+        assertTrue(gaveUp.reconnectEnabled)
+        assertTrue(gaveUp.detail.contains("Couldn't reconnect."))
+        val onNetwork = wifiInfoControls(WifiIndicator(WifiLink.NoInternet, "Cafe"), false, false)
+        assertEquals(listOf("Parent Menu"), onNetwork.actions)
+        assertTrue(onNetwork.detail.contains("Cafe, no internet"))
+    }
+
+    @Test
+    fun reconnectAttemptTimesOutAfterTwentyFiveSecondsUnlessANetworkReturns() {
+        assertEquals(25_000L, RECONNECT_TIMEOUT_MS)
+        assertEquals(ReconnectPhase.Running, reconnectPhase(0, 24_999, onNetwork = false))
+        assertEquals(ReconnectPhase.TimedOut, reconnectPhase(0, 25_000, onNetwork = false))
+        assertEquals(ReconnectPhase.Succeeded, reconnectPhase(0, 1_000, onNetwork = true))
+        assertEquals(ReconnectPlan.Blocked, reconnectPlan(enabled = false, canChange = false))
+        assertEquals(ReconnectPlan.EnableThenReconnect, reconnectPlan(enabled = false, canChange = true))
+        assertEquals(ReconnectPlan.ReconnectSaved, reconnectPlan(enabled = true, canChange = true))
+        assertEquals(ReconnectPlan.ReconnectSaved, reconnectPlan(enabled = true, canChange = false))
+    }
+
+    @Test
+    fun reconnectPausesTheFiveSecondSleepUntilItFinishes() {
+        val idle = LockIdle()
+        idle.coverShown(0)
+        idle.touch(1_000)
+        assertEquals(6_000L, deadlineWhileWifiInfoShown(idle.deadline()))
+        idle.dialogOpened()
+        assertNull(idle.deadline())
+        assertFalse(idle.alarm(30_000).turnScreenOff)
+        val done = idle.dialogClosed(10_000)
+        assertEquals(5_000L, done.nextDelayMs)
+        assertEquals(15_000L, idle.deadline())
+        assertFalse(idle.alarm(14_999).turnScreenOff)
+        assertTrue(idle.alarm(15_000).turnScreenOff)
     }
 
     @Test
