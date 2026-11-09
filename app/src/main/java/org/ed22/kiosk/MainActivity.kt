@@ -409,7 +409,8 @@ class MainActivity : AppCompatActivity() {
      * screen is off, and the clock is refreshed when the screen comes back.
      * After 5 seconds with no touches the screen actually turns off. The power button wakes it
      * back to this cover. Tap-to-wake is not turned on by the app. The Wi-Fi row opens a status
-     * box that does not pause that timer. Its Parent Menu button asks for the existing PIN.
+     * box. Reconnect, when the radio is not on a network, pauses that timer until it finishes.
+     * Parent Menu asks for the existing PIN.
      */
     fun updateLockOverlay() {
         if (!::root.isInitialized) return

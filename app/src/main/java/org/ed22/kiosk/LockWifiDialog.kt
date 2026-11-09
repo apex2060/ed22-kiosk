@@ -13,14 +13,15 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 
 /**
- * In-kiosk Wi-Fi panel. It does not open Android Settings or change the lock policy,
- * and does not record the password. While it is open the lock-screen idle timer is paused.
+ * Lock-screen Wi-Fi box and the parent-only join panel. The box does not open Settings,
+ * change the lock policy, or record a password. Reconnect retries saved networks only.
  */
 object LockWifiDialog {
     private var current: AlertDialog? = null
@@ -43,7 +44,10 @@ object LockWifiDialog {
         current?.dismiss()
     }
 
-    /** Read-only status. Does not pause the idle timer and has no Wi-Fi controls. */
+    /**
+     * Status plus Reconnect when Wi-Fi is not on a network. Reconnect uses saved networks only.
+     * Opening the box does not pause idle sleep; a reconnect attempt does, until it finishes or the box closes.
+     */
     fun show(activity: MainActivity) {
         if (activity.isDestroyed || current?.isShowing == true) return
         val density = activity.resources.displayMetrics.density
@@ -52,28 +56,121 @@ object LockWifiDialog {
             textSize = 18f
             setPadding(dp(24), dp(12), dp(24), dp(8))
         }
-        val parent = Button(activity).apply {
-            text = PARENT_MENU_BUTTON
-            isAllCaps = false
-            transformationMethod = null
-            setOnClickListener {
-                current?.dismiss()
-                ParentMenu.prompt(activity)
+        val progress = ProgressBar(activity).apply {
+            isIndeterminate = true
+            visibility = View.GONE
+        }
+        val reconnect = labeledButton(activity, RECONNECT_BUTTON)
+        val parent = labeledButton(activity, PARENT_MENU_BUTTON)
+        var attemptStarted: Long? = null
+        var failed = false
+        var holdingSleep = false
+        fun releaseSleep() {
+            if (!holdingSleep) return
+            holdingSleep = false
+            activity.parentDialogHidden()
+        }
+        fun holdSleep() {
+            if (holdingSleep) return
+            holdingSleep = true
+            activity.parentDialogShown()
+        }
+        var reload: (() -> Unit)? = null
+        var tick: Runnable? = null
+        fun stopAttempt(success: Boolean, reportFailure: Boolean) {
+            if (attemptStarted == null && !holdingSleep) return
+            attemptStarted = null
+            tick?.let { handler.removeCallbacks(it) }
+            handler.removeCallbacks(refreshSoon)
+            failed = reportFailure && !success
+            releaseSleep()
+            reload?.invoke()
+        }
+        tick = Runnable {
+            val tickRunnable = tick ?: return@Runnable
+            val started = attemptStarted ?: return@Runnable
+            val indicator = indicatorOf(WifiControl.snapshot(activity))
+            when (reconnectPhase(started, android.os.SystemClock.uptimeMillis(), onNetwork(indicator.link))) {
+                ReconnectPhase.Succeeded -> stopAttempt(success = true, reportFailure = false)
+                ReconnectPhase.TimedOut -> stopAttempt(success = false, reportFailure = true)
+                ReconnectPhase.Running -> {
+                    WifiControl.reconnectSaved(activity)
+                    reload?.invoke()
+                    handler.postDelayed(tickRunnable, 2_000)
+                }
             }
         }
-        fun reload() {
-            if (activity.isDestroyed) return
-            status.text = infoText(indicatorOf(WifiControl.snapshot(activity)))
+        reload = {
+            if (!activity.isDestroyed) {
+            val indicator = indicatorOf(WifiControl.snapshot(activity))
+            val started = attemptStarted
+            val phase = if (started == null) null else reconnectPhase(
+                started,
+                android.os.SystemClock.uptimeMillis(),
+                onNetwork(indicator.link),
+            )
+            if (phase == ReconnectPhase.Succeeded) {
+                stopAttempt(success = true, reportFailure = false)
+            } else if (phase == ReconnectPhase.TimedOut) {
+                stopAttempt(success = false, reportFailure = true)
+            } else {
+                val controls = wifiInfoControls(indicator, attemptStarted != null, failed)
+                status.text = controls.detail
+                val showReconnect = RECONNECT_BUTTON in controls.actions
+                reconnect.visibility = if (showReconnect) View.VISIBLE else View.GONE
+                reconnect.isEnabled = controls.reconnectEnabled
+                progress.visibility = if (controls.showProgress) View.VISIBLE else View.GONE
+            }
+            }
+        }
+        pendingReload = reload
+        reconnect.setOnClickListener {
+            if (attemptStarted != null || !reconnect.isEnabled) return@setOnClickListener
+            failed = false
+            if (reconnectPlan(
+                    indicatorOf(WifiControl.snapshot(activity)).link != WifiLink.Off,
+                    WifiControl.canChange(activity),
+                ) == ReconnectPlan.Blocked
+            ) {
+                failed = true
+                reload?.invoke()
+                return@setOnClickListener
+            }
+            if (!WifiControl.reconnectSaved(activity) &&
+                indicatorOf(WifiControl.snapshot(activity)).link == WifiLink.Off
+            ) {
+                failed = true
+                reload?.invoke()
+                return@setOnClickListener
+            }
+            attemptStarted = android.os.SystemClock.uptimeMillis()
+            holdSleep()
+            tick?.let { handler.removeCallbacks(it) }
+            handler.postDelayed(tick!!, 2_000)
+            reload?.invoke()
+        }
+        parent.setOnClickListener {
+            stopAttempt(success = false, reportFailure = false)
+            current?.dismiss()
+            ParentMenu.prompt(activity)
+        }
+        val buttons = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = dp(8)
+                rightMargin = dp(8)
+            }
+            addView(reconnect, lp)
+            addView(parent, LinearLayout.LayoutParams(lp))
         }
         val body = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(8))
             addView(status)
-            addView(parent, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                leftMargin = dp(16)
-                rightMargin = dp(16)
-                bottomMargin = dp(12)
+            addView(progress, LinearLayout.LayoutParams(dp(48), dp(48)).apply {
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
             })
+            addView(buttons)
         }
         val dialog = AlertDialog.Builder(activity)
             .setTitle("Wi-Fi")
@@ -82,13 +179,14 @@ object LockWifiDialog {
             .create()
         dialog.setCanceledOnTouchOutside(true)
         dialog.setOnDismissListener {
+            stopAttempt(success = false, reportFailure = false)
             unregisterScan(activity)
             if (current === dialog) current = null
             activity.hideSystemUi()
         }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (LockWifi.isWifiAction(intent?.action)) reload()
+                if (LockWifi.isWifiAction(intent?.action)) reload?.invoke()
             }
         }
         scanReceiver = receiver
@@ -100,7 +198,7 @@ object LockWifiDialog {
                 ContextCompat.RECEIVER_NOT_EXPORTED,
             )
             current = dialog
-            reload()
+            reload?.invoke()
             dialog.show()
         } catch (e: Exception) {
             unregisterScan(activity)
@@ -289,6 +387,12 @@ object LockWifiDialog {
             activity.parentDialogHidden()
             throw e
         }
+    }
+
+    private fun labeledButton(activity: MainActivity, label: String) = Button(activity).apply {
+        text = label
+        isAllCaps = false
+        transformationMethod = null
     }
 
     private fun unregisterScan(activity: MainActivity) {

@@ -176,9 +176,56 @@ fun infoText(indicator: WifiIndicator): String {
 
 /**
  * The information box does not pause idle sleep. [deadline] is the countdown already running
- * after the tap that opened it. PIN and parent dialogs pause separately.
+ * after the tap that opened it. A reconnect attempt, the PIN prompt, and parent dialogs pause separately.
  */
 fun deadlineWhileWifiInfoShown(deadline: Long?): Long? = deadline
+
+const val RECONNECT_BUTTON = "Reconnect"
+const val RECONNECTING_LABEL = "Reconnecting…"
+const val RECONNECT_FAILED = "Couldn't reconnect."
+const val RECONNECT_TIMEOUT_MS = 25_000L
+
+enum class ReconnectPlan { EnableThenReconnect, ReconnectSaved, Blocked }
+
+/** Saved-network reconnect only. Never selects a new network or asks for a password. */
+fun reconnectPlan(enabled: Boolean, canChange: Boolean): ReconnectPlan = when {
+    !canChange && !enabled -> ReconnectPlan.Blocked
+    !enabled -> ReconnectPlan.EnableThenReconnect
+    else -> ReconnectPlan.ReconnectSaved
+}
+
+enum class ReconnectPhase { Running, Succeeded, TimedOut }
+
+fun reconnectPhase(startedAt: Long, now: Long, onNetwork: Boolean, timeoutMs: Long = RECONNECT_TIMEOUT_MS): ReconnectPhase = when {
+    onNetwork -> ReconnectPhase.Succeeded
+    now - startedAt >= timeoutMs -> ReconnectPhase.TimedOut
+    else -> ReconnectPhase.Running
+}
+
+fun onNetwork(link: WifiLink): Boolean = link == WifiLink.Connected || link == WifiLink.NoInternet
+
+data class WifiInfoControls(
+    val detail: String,
+    val actions: List<String>,
+    val reconnectEnabled: Boolean,
+    val showProgress: Boolean,
+)
+
+fun wifiInfoControls(indicator: WifiIndicator, attemptRunning: Boolean, failed: Boolean): WifiInfoControls {
+    val showReconnect = attemptRunning || indicator.link == WifiLink.Off || indicator.link == WifiLink.Disconnected
+    val detail = buildString {
+        append(infoText(indicator))
+        if (attemptRunning) append("\n").append(RECONNECTING_LABEL)
+        if (failed && !attemptRunning) append("\n").append(RECONNECT_FAILED)
+    }
+    val actions = if (showReconnect) listOf(RECONNECT_BUTTON, PARENT_MENU_BUTTON) else listOf(PARENT_MENU_BUTTON)
+    return WifiInfoControls(
+        detail = detail,
+        actions = actions,
+        reconnectEnabled = showReconnect && !attemptRunning,
+        showProgress = attemptRunning,
+    )
+}
 
 object LockWifi {
     const val ACTION_WIFI_STATE = "android.net.wifi.WIFI_STATE_CHANGED"
