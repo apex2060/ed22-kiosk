@@ -60,7 +60,26 @@ class MainActivity : AppCompatActivity() {
             private set
         var inForeground = false
             private set
+
+        const val OFFLINE_URL = "file:///android_asset/offline.html"
+
+        /** Renderer deaths (wall clock ms) in this process, for the rebuild backoff. */
+        private var rendererDeaths: List<Long> = emptyList()
     }
+
+    // --- offline recovery state (main WebView only) ---
+    /** The offline page is showing. */
+    private var showingOffline = false
+    /** The last main-frame load failed. */
+    private var lastLoadFailed = false
+    /** A request failed while the current page was still loading, so its scripts or data may be missing. */
+    private var brokenLoad = false
+    private var pageLoading = false
+    private var pageFinishedAt = 0L
+    private var lastRecoveryAt = -Recovery.RELOAD_GAP_MS
+    /** When onStop logged "left the screen" (elapsed ms), so onStart can log how long it was away. */
+    private var stopLoggedAt = 0L
+    private val networkBackListener: () -> Unit = { onNetworkBack() }
 
     lateinit var webView: WebView
         private set
@@ -207,6 +226,7 @@ class MainActivity : AppCompatActivity() {
         }
         HistoryReporter.flush(this)
         Updater.schedule(this)
+        NetworkWatch.listeners += networkBackListener
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -226,6 +246,8 @@ class MainActivity : AppCompatActivity() {
         if (!::webView.isInitialized) return
         inForeground = true
         hideSystemUi()
+        // Timers on the offline page may have been throttled while we were in the background.
+        if (showingOffline && NetworkWatch.online) onNetworkBack()
         KioskPolicy.startLockTask(this)
         webView.onResume()
         bridge.onResume()
@@ -359,7 +381,43 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (stopLoggedAt != 0L) {
+            KioskLog.add(this, "kioskBack", "Little Explorer is back in front after ${(SystemClock.elapsedRealtime() - stopLoggedAt) / 1000}s")
+            stopLoggedAt = 0L
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Left the screen while the kiosk should own it: screen on, no allowed app opened, not paused by a parent,
+        // and lock task off. That is the "dropped to the home screen" case (pickers and prompts keep lock task on).
+        if (!::webView.isInitialized || isChangingConfigurations || !isScreenInteractive()) return
+        if (!CrashGuard.shouldOwnScreen(this) || AppUsage.openPkg(this) != null || KioskPolicy.isLockTaskActive(this)) return
+        stopLoggedAt = SystemClock.elapsedRealtime()
+        KioskLog.add(this, "kioskStopped", "Little Explorer left the screen with lock task off and no allowed app open" +
+            (if (isFinishing) " (finishing)" else ""), important = true)
+        KioskWatchdog.checkSoon(this, 5_000)
+    }
+
+    @Suppress("DEPRECATION") // the levels still arrive on every Android version we support
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level == TRIM_MEMORY_RUNNING_CRITICAL || level == TRIM_MEMORY_COMPLETE) {
+            KioskLog.add(this, "lowMemory", "Android is low on memory (trim level $level, ${if (inForeground) "in front" else "in background"})")
+        }
+    }
+
     override fun onDestroy() {
+        NetworkWatch.listeners -= networkBackListener
+        // recreate() (renderer rebuild) and rotation set isChangingConfigurations; a parent's Exit sets maintenance first.
+        if (::webView.isInitialized && !isChangingConfigurations && CrashGuard.shouldOwnScreen(this)) {
+            val why = "kiosk activity destroyed" + (if (isFinishing) " (finishing)" else " (by Android)")
+            KioskLog.add(this, "kioskDestroyed", why, important = true)
+            KioskLog.exit(this, why)
+            KioskWatchdog.checkSoon(applicationContext, 3_000)
+        }
         if (current === this) current = null
         DeviceSync.removeListener(policyListener)
         removeLockOverlay()
@@ -602,6 +660,26 @@ class MainActivity : AppCompatActivity() {
         KioskPolicy.restoreStayOnWhilePluggedIn(this, value)
     }
 
+    /** The internet is back ([NetworkWatch]): retry the offline page's target, or reload a page that loaded broken. */
+    private fun onNetworkBack() {
+        if (isDestroyed || !::webView.isInitialized) return
+        val now = SystemClock.elapsedRealtime()
+        when (Recovery.onNetworkBack(showingOffline, lastLoadFailed, brokenLoad, now - lastRecoveryAt)) {
+            Recovery.PageAction.NONE -> Unit
+            Recovery.PageAction.RETRY_TARGET -> {
+                lastRecoveryAt = now
+                val target = Recovery.offlineTarget(webView.url, KioskConfig.START_URL)
+                KioskLog.add(this, "pageRecover", "Internet back: leaving the offline page for $target")
+                webView.loadUrl(target)
+            }
+            Recovery.PageAction.RELOAD -> {
+                lastRecoveryAt = now
+                KioskLog.add(this, "pageRecover", "Internet back: reloading ${webView.url} (it ${if (lastLoadFailed) "failed" else "loaded with errors"} while offline)")
+                webView.reload()
+            }
+        }
+    }
+
     fun goHome() {
         if (customView != null) hideCustomView()
         closePopup()
@@ -701,6 +779,14 @@ class MainActivity : AppCompatActivity() {
         child.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
                 blockNavigation(view, request.url)
+
+            // All WebViews share one renderer. If any of them returns false here, Android kills the whole app,
+            // so the popup handles it too (the main WebView rebuilds itself).
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                KioskLog.add(this@MainActivity, "rendererGone", "Popup renderer gone (crashed=${detail.didCrash()})")
+                handler.post { if (popup === view) closePopup() }
+                return true
+            }
         }
         child.webChromeClient = object : WebChromeClient() {
             override fun onCloseWindow(window: WebView) {
@@ -779,11 +865,23 @@ class MainActivity : AppCompatActivity() {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             bridge.onNavigation(view, url)
-            if (view === webView) setPageHasAppsUi(false)
+            if (view === webView) {
+                setPageHasAppsUi(false)
+                showingOffline = url.startsWith(OFFLINE_URL)
+                if (!showingOffline) {
+                    lastLoadFailed = false
+                    brokenLoad = false
+                    pageLoading = true
+                }
+            }
         }
 
         override fun onPageFinished(view: WebView, url: String) {
             bridge.onPageFinished(view, url)
+            if (view === webView && !url.startsWith(OFFLINE_URL)) {
+                pageLoading = false
+                pageFinishedAt = SystemClock.elapsedRealtime()
+            }
         }
 
         override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
@@ -791,16 +889,53 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-            if (!request.isForMainFrame || error.errorCode == ERROR_UNSUPPORTED_SCHEME) return
-            view.loadUrl("file:///android_asset/offline.html#" + Uri.encode(request.url.toString()))
+            if (error.errorCode == ERROR_UNSUPPORTED_SCHEME || request.url.toString().startsWith(OFFLINE_URL)) return
+            if (!request.isForMainFrame) {
+                if (showingOffline) return
+                // A script, style or data request failed while the page was still starting: it may be half-built.
+                // Reloaded once the internet is back (onNetworkBack). Later failures (a running page) are left alone.
+                if (view === webView && !NetworkWatch.online &&
+                    (pageLoading || SystemClock.elapsedRealtime() - pageFinishedAt < 5_000)
+                ) brokenLoad = true
+                return
+            }
+            if (view === webView) lastLoadFailed = true
+            KioskLog.add(this@MainActivity, "loadFailed",
+                "Page failed to load: ${error.errorCode} ${error.description} ${request.url}" +
+                    (if (NetworkWatch.online) "" else " (no internet)"))
+            view.loadUrl(OFFLINE_URL + "#" + Uri.encode(request.url.toString()))
+        }
+
+        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: android.webkit.WebResourceResponse) {
+            if (request.isForMainFrame && response.statusCode >= 500) {
+                KioskLog.add(this@MainActivity, "httpError", "Server error ${response.statusCode} for ${request.url}")
+            }
         }
 
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-            // The page's renderer crashed or was killed; rebuild the activity with a fresh WebView.
+            // The page's renderer crashed or was killed (often for memory while an Android app is in front).
+            // Returning true keeps the app alive; the activity is rebuilt with a fresh WebView on the start page.
+            val why = if (detail.didCrash()) "page renderer crashed"
+                else "page renderer was stopped by Android (priority ${detail.rendererPriorityAtExit()})"
+            KioskLog.add(this@MainActivity, "rendererGone", "$why on ${view.url}", important = true)
+            if (view !== webView) {
+                // Already replaced (a second callback for the same death).
+                runCatching { (view.parent as? ViewGroup)?.removeView(view); view.destroy() }
+                return true
+            }
+            KioskLog.exit(this@MainActivity, why)
+            val now = System.currentTimeMillis()
+            rendererDeaths = Recovery.recent(rendererDeaths, now, Recovery.RENDERER_WINDOW_MS)
+            val delay = Recovery.rendererRebuildDelay(rendererDeaths.size)
             root.removeView(view)
             view.destroy()
             webView = WebView(this@MainActivity)
-            recreate()
+            if (delay == 0L) {
+                recreate()
+            } else {
+                KioskLog.add(this@MainActivity, "rendererGone", "${rendererDeaths.size} renderer deaths in 2 min; rebuilding in ${delay / 1000}s")
+                handler.postDelayed({ if (!isDestroyed && !isFinishing) recreate() }, delay)
+            }
             return true
         }
     }

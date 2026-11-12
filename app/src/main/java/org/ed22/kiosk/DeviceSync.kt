@@ -59,6 +59,8 @@ object DeviceSync {
     /** Hash of the appUsage last written to the device doc. */
     private const val KEY_USAGE_HASH = "appUsageHash"
     private const val KEY_CHILD_USAGE_HASH = "appUsageByChildHash"
+    /** Hash of the status.log / status.lastExit last written. */
+    private const val KEY_LOG_HASH = "deviceLogHash"
     const val ICON_PX_LIST = 96
     private const val STATUS_WORK = "kiosk-status-periodic"
     private const val RETRY_MS = 5 * 60_000L
@@ -140,7 +142,7 @@ object DeviceSync {
         auth.signInWithCustomToken(token)
             .addOnSuccessListener {
                 if (!docId.isNullOrBlank() && docId != deviceDocId()) {
-                    prefs(app).edit().putString(KEY_DOC, docId).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).apply()
+                    prefs(app).edit().putString(KEY_DOC, docId).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).remove(KEY_LOG_HASH).apply()
                 }
                 startListener()
                 reportStatus(app)
@@ -155,7 +157,7 @@ object DeviceSync {
     fun signOut() {
         stopListener()
         auth.signOut()
-        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_LOCAL_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).apply()
+        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_LOCAL_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).remove(KEY_LOG_HASH).apply()
         listenerStatus = "Not signed in"
         applyPolicy()
     }
@@ -241,11 +243,18 @@ object DeviceSync {
             "reboot" -> if (!KioskPolicy.reboot(app)) Log.w(TAG, "reboot needs device owner")
             "openApp" -> runCatching { launch(app, cmd.optString("package")) }
                 .onFailure { e -> Log.w(TAG, "openApp ${cmd.optString("package")} failed: ${e.message}") }
+            // The page already got this policy (applyPolicy ran first) and opens the tool itself, once per id.
+            // Natively we only make sure Little Explorer is in front of any Android app the child has open.
+            "openTool" -> if (RemoteCommands.bringToFront("openTool", MainActivity.inForeground) && !Prefs.isMaintenance(app)) {
+                KioskLog.add(app, "openTool", "Brought Little Explorer to the front for ${cmd.optString("title").ifBlank { cmd.optString("toolId") }}" +
+                    (AppUsage.openPkg(app)?.let { " (was in $it)" } ?: ""))
+                openKiosk(app)
+            }
             else -> Log.w(TAG, "Unknown command type: ${cmd.optString("type")}")
         }
     }
 
-    private fun openKiosk(ctx: Context) {
+    fun openKiosk(ctx: Context) {
         try {
             ctx.startActivity(
                 Intent(ctx, MainActivity::class.java)
@@ -510,6 +519,15 @@ object DeviceSync {
         val byChildHash = sha256(byChild.toString())
         val sendByChild = p.getString(KEY_CHILD_USAGE_HASH, null) != byChildHash
         if (sendByChild) fields["status.appUsageByChild"] = byChild
+        // Device event log (KioskLog): the newest entries plus why the kiosk last left the screen unexpectedly.
+        val log = KioskLog.forUpload(ctx)
+        val lastExit = KioskLog.lastExit(ctx)
+        val logHash = sha256(log.toString() + "|" + lastExit?.toString())
+        val sendLog = p.getString(KEY_LOG_HASH, null) != logHash
+        if (sendLog) {
+            fields["status.log"] = log
+            if (lastExit != null) fields["status.lastExit"] = mapOf("at" to lastExit.optLong("at"), "why" to lastExit.optString("why"))
+        }
         return doc(id).update(fields)
             .addOnSuccessListener {
                 // Only remember the hash once the server has it, and only for the doc it was written to.
@@ -517,8 +535,28 @@ object DeviceSync {
                 if (sendApps) p.edit().putString(KEY_APPS_HASH, hash).apply()
                 if (sendUsage) p.edit().putString(KEY_USAGE_HASH, usageHash).apply()
                 if (sendByChild) p.edit().putString(KEY_CHILD_USAGE_HASH, byChildHash).apply()
+                if (sendLog) p.edit().putString(KEY_LOG_HASH, logHash).apply()
             }
             .addOnFailureListener { e -> Log.w(TAG, "Status update failed", e) }
+    }
+
+    private val reportSoonRunnable = Runnable { runCatching { reportStatus(app) } }
+
+    /** An upload in about 10 s (several events in a row make one write). Firestore queues it while offline. */
+    fun reportSoon() {
+        if (!::app.isInitialized) return
+        handler.removeCallbacks(reportSoonRunnable)
+        handler.postDelayed(reportSoonRunnable, 10_000)
+    }
+
+    /** The internet is back ([NetworkWatch]): restart a failed device-doc listener now (not in 5 min) and upload status. */
+    fun onNetworkBack() {
+        if (!::app.isInitialized || !isSignedIn()) return
+        if (registration == null) {
+            Log.i(TAG, "Internet back: restarting the device doc listener")
+            startListener()
+        }
+        reportStatus(app)
     }
 
     private fun sha256(s: String): String =

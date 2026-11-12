@@ -10,7 +10,13 @@ import androidx.core.content.ContextCompat
 class KioskApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // First, so anything that fails during start-up is logged too.
+        CrashGuard.install(this)
+        KioskLog.add(this, "appStart", "Little Explorer ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) started")
+        KioskLog.recordPastExits(this)
+        NetworkWatch.start(this)
         DeviceSync.init(this)
+        KioskWatchdog.schedule(this)
         // Screen off ends the current AppUsage session. If that app is still in front when the screen comes
         // back on, a "resumed" session keeps counting it for the allowed-apps limits.
         ContextCompat.registerReceiver(
@@ -23,6 +29,8 @@ class KioskApp : Application() {
                         AppUsage.end(context)
                         return
                     }
+                    // Screen back on: make sure the kiosk is still the one in front.
+                    KioskWatchdog.checkSoon(context, 2_000)
                     val pkg = pausedPkg ?: return
                     pausedPkg = null
                     if (!MainActivity.inForeground && !Prefs.isMaintenance(context)) {

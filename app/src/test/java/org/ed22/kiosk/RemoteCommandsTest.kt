@@ -58,6 +58,32 @@ class RemoteCommandsTest {
         assertFalse(d.run); assertTrue(d.handled)
     }
 
+    private fun tool(id: Any) = JSONObject().put("id", id).put("type", "openTool")
+        .put("studentId", "s1").put("toolId", "t1").put("title", "Typing")
+
+    @Test
+    fun openToolRunsOnceWhileFreshAndUnlocked() {
+        val d = RemoteCommands.decide(tool(now.toString()), null, now + 1_000, false) { false } // no package check
+        assertTrue(d.run); assertTrue(d.handled)
+        val again = RemoteCommands.decide(tool(now.toString()), now.toString(), now, false) { true }
+        assertFalse(again.run); assertFalse(again.handled)
+        val old = RemoteCommands.decide(tool((now - 121_000).toString()), null, now, false) { true }
+        assertFalse(old.run); assertTrue(old.handled)
+        val locked = RemoteCommands.decide(tool(now.toString()), null, now, true) { true }
+        assertFalse(locked.run); assertTrue(locked.handled)
+        assertFalse(RemoteCommands.decide(tool("x"), null, now, false) { true }.run)
+    }
+
+    @Test
+    fun openToolBringsTheKioskForwardOnlyWhenBehind() {
+        assertTrue(RemoteCommands.bringToFront("openTool", kioskInFront = false))
+        assertFalse(RemoteCommands.bringToFront("openTool", kioskInFront = true))
+        assertFalse(RemoteCommands.bringToFront("openApp", kioskInFront = false))
+        assertFalse(RemoteCommands.bringToFront("reload", kioskInFront = false))
+        assertTrue("openToolFront" in RemoteCommands.FEATURES)
+        assertTrue("deviceLog" in RemoteCommands.FEATURES)
+    }
+
     @Test
     fun featuresIncludeOpenApp() {
         assertTrue("openApp" in RemoteCommands.FEATURES)

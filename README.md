@@ -402,6 +402,7 @@ policy: {
   locked: false,
   command: {id: 'c-123', type: 'reload' | 'goHome' | 'reboot'}
         // or {id: '<epoch ms>', type: 'openApp', package: 'com.android.vending'}
+        // or {id: '<epoch ms>', type: 'openTool', studentId, toolId, title}   (opened by /mobile)
 }
 ```
 
@@ -429,8 +430,42 @@ policy: {
   alarm, back to the kiosk when its time ends or its entry is removed). It is dropped (id still used up) when
   the id isn't epoch ms or is more than 2 minutes old, when `locked` is true, or when the app isn't allowed
   right now in the policy in force.
+  **`openTool`** (`status.features` has `'openToolFront'`) is opened by the /mobile page itself (it gets the policy
+  through `kiosk.on('policy')` and runs each id once). Natively, the kiosk is only brought to the front, above any
+  Android app the child has open, with the same 2-minute and `locked` checks as `openApp`. Nothing else is done natively.
 - In the page, `kiosk.on('policy', fn)` gets the new policy on each change (`until` as epoch ms),
   and `kiosk.getAuth()` includes the cached one.
+
+### Device event log and recovery
+
+The app keeps a small log of events on the device (the newest 200, in `files/kiosk-log.json`) and uploads it with
+the status fields (`status.features` has `'deviceLog'`):
+
+- **`status.log`**: the newest 50 entries, oldest first: `{at, kind, msg, detail?, n?, lastAt?}`. `at` is epoch ms.
+  A repeat of the newest entry is folded into it (`n` = count, `lastAt` = newest time), so an offline retry loop
+  doesn't push everything else out. `kind` is one of `appStart`, `pastExit` (Android 11+: how the previous run
+  ended, from the system's own record: crash, ANR, low memory, killed, updated…), `crash` (with the stack in
+  `detail`), `relaunch`, `rendererGone`, `kioskStopped` / `kioskBack` (left the screen with lock task off and no allowed
+  app open), `kioskDestroyed`, `leftKiosk` (the watchdog reopened the kiosk), `loadFailed` (code, description, URL),
+  `httpError` (5xx on the main page), `network` (internet lost / back, with how long), `pageRecover`, `lowMemory`,
+  `openTool`.
+- **`status.lastExit`**: `{at, why}`, the last time the kiosk left the screen unexpectedly.
+
+Both are written only when they changed, in the same `update()` as the other status fields, and also when the
+internet comes back (the device-doc listener is restarted then too, if it had failed).
+
+Recovery:
+
+- **Offline page**: a failed main-page load shows `offline.html`, which retries every 10 seconds. When Android reports
+  validated internet again, the app leaves it at once. A page that started loading while offline and had failed
+  requests is reloaded once the internet is back; a page that loaded fine is never reloaded for a Wi-Fi blip.
+- **Renderer gone**: every WebView (popups too) handles it, so the app is not killed; the activity is rebuilt on the
+  start page (after 3 deaths in 2 minutes, it waits 15 seconds first).
+- **Crash**: the stack is logged, and while the kiosk should own the screen (device owner, PIN set, not paused from the
+  parent menu) it reopens itself after 2 seconds (60 seconds after 3 crashes in 2 minutes), without the system crash box.
+- **Watchdog**: about once a minute while the app runs, and on screen on: if the kiosk should own the screen and no
+  allowed app is open, it reopens Little Explorer when its activity is gone, or when it was not in front with lock
+  task off on two checks in a row. Pickers and prompts (lock task still on) are left alone.
 
 ### Allowed-apps rules
 
