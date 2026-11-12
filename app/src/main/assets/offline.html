@@ -10,6 +10,7 @@
          font-family: system-ui, sans-serif; background: #10243f; color: #fff; padding: 24px; box-sizing: border-box; }
   h1 { font-size: 1.6rem; margin: 0 0 12px; }
   p { opacity: .85; margin: 0 0 24px; }
+  #next { font-size: .95rem; opacity: .7; margin: 16px 0 0; min-height: 1.2em; }
   button { font-size: 1.1rem; padding: 12px 28px; border: 0; border-radius: 999px; background: #fff; color: #10243f; }
 </style>
 </head>
@@ -18,14 +19,29 @@
   <h1>Can't reach the internet</h1>
   <p>We'll keep trying. Ask a grown-up to check the Wi-Fi.</p>
   <button id="retry">Try again</button>
+  <div id="next"></div>
 </div>
 <script>
+  // Retries on its own every 10 s, whether or not navigator.onLine says we are online (it can stay stale in a
+  // WebView). The app also leaves this page by itself when Android reports that the internet is back.
   var target = decodeURIComponent(location.hash.slice(1)) || 'https://us.ed22.org/mobile';
   if (!/^https?:\/\//.test(target)) target = 'https://us.ed22.org/mobile';
-  function retry() { location.replace(target); }
+  var left = 10;
+  var next = document.getElementById('next');
+  function retry() {
+    next.textContent = 'Trying again\u2026';
+    location.replace(target);
+  }
   document.getElementById('retry').onclick = retry;
   window.addEventListener('online', retry);
-  setInterval(function () { if (navigator.onLine) retry(); }, 15000);
+  function tick() {
+    left -= 1;
+    if (left <= 0) return retry();
+    next.textContent = 'Trying again in ' + left + 's';
+    setTimeout(tick, 1000);
+  }
+  next.textContent = 'Trying again in ' + left + 's';
+  setTimeout(tick, 1000);
 </script>
 </body>
 </html>
