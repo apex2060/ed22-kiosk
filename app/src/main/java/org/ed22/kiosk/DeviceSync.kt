@@ -61,6 +61,9 @@ object DeviceSync {
     private const val KEY_CHILD_USAGE_HASH = "appUsageByChildHash"
     /** Hash of the status.log / status.lastExit last written. */
     private const val KEY_LOG_HASH = "deviceLogHash"
+    /** Hash of the status.deviceTime last written; and a parent's PIN grant on this tablet {sid, until}. */
+    private const val KEY_TIME_HASH = "deviceTimeHash"
+    private const val KEY_LOCAL_EXTRA = "deviceTimeLocalExtra"
     const val ICON_PX_LIST = 96
     private const val STATUS_WORK = "kiosk-status-periodic"
     private const val RETRY_MS = 5 * 60_000L
@@ -82,6 +85,7 @@ object DeviceSync {
 
     fun init(ctx: Context) {
         app = ctx.applicationContext
+        ScreenTime.start(app)
         enforce(app)
         val wm = WorkManager.getInstance(app)
         wm.enqueueUniquePeriodicWork(
@@ -142,7 +146,7 @@ object DeviceSync {
         auth.signInWithCustomToken(token)
             .addOnSuccessListener {
                 if (!docId.isNullOrBlank() && docId != deviceDocId()) {
-                    prefs(app).edit().putString(KEY_DOC, docId).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).remove(KEY_LOG_HASH).apply()
+                    prefs(app).edit().putString(KEY_DOC, docId).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).remove(KEY_LOG_HASH).remove(KEY_TIME_HASH).apply()
                 }
                 startListener()
                 reportStatus(app)
@@ -157,7 +161,7 @@ object DeviceSync {
     fun signOut() {
         stopListener()
         auth.signOut()
-        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_LOCAL_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).remove(KEY_LOG_HASH).apply()
+        prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_LOCAL_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).remove(KEY_LOG_HASH).remove(KEY_TIME_HASH).remove(KEY_LOCAL_EXTRA).apply()
         listenerStatus = "Not signed in"
         applyPolicy()
     }
@@ -279,14 +283,83 @@ object DeviceSync {
         return out
     }
 
-    /** [Rules] state of every allowedApps entry for the active child, in the tablet's time zone. */
+    /**
+     * [Rules] state of every allowedApps entry for the active child, in the tablet's time zone. While the child's device-wide
+     * screen time is up ([timeState]), no app is allowed (why 'deviceTime').
+     */
     fun appStates(ctx: Context, now: Long = System.currentTimeMillis()): Map<String, Rules.State> {
         val sid = Prefs.activeStudentId(ctx)
         val zone = ZoneId.systemDefault()
         val used = Rules.Used { pkg, who, from, to -> AppUsage.usedMinutes(ctx, pkg, who, from, to) }
         val policy = policy(ctx)
         val strict = policy.optBoolean("strict", false)
-        return allowedEntries(policy).mapValues { (_, e) -> Rules.state(e, now, zone, sid, used, strict) }
+        val states = allowedEntries(policy).mapValues { (_, e) -> Rules.state(e, now, zone, sid, used, strict) }
+        if (!sid.isNullOrEmpty() && !timeState(ctx, now).allowed) return states.mapValues { Rules.State(false, "deviceTime") }
+        return states
+    }
+
+    // --- device-wide screen time (policy.deviceTime, DeviceTime + ScreenTime) ---
+
+    /** Called with the active child's screen-time state whenever it changes (the rest cover, kiosk.on('deviceTime')). */
+    val timeListeners = mutableSetOf<(DeviceTime.State) -> Unit>()
+    /** Called once per run-out with the minutes left (the 5-minute warning). */
+    val timeWarnListeners = mutableSetOf<(Int) -> Unit>()
+    private var lastTimeKey: String? = null
+    private var warnedFor: Long? = null
+
+    /** A parent's PIN grant on this tablet: until (ms) for [sid] when it is in the future, else null. */
+    fun localExtra(ctx: Context, sid: String?, now: Long = System.currentTimeMillis()): Long? {
+        if (sid.isNullOrEmpty()) return null
+        val o = stored(ctx, KEY_LOCAL_EXTRA) ?: return null
+        val until = o.optLong("until", 0L)
+        return if (o.optString("sid") == sid && until > now) until else null
+    }
+
+    /** The active child's screen time now (parent mode: never limited), with this tablet's own clock and zone. */
+    fun timeState(ctx: Context, now: Long = System.currentTimeMillis()): DeviceTime.State {
+        val sid = Prefs.activeStudentId(ctx)
+        return DeviceTime.forStudent(policy(ctx).optJSONObject("deviceTime"), now, ZoneId.systemDefault(), sid,
+            ScreenTime.minutesToday(ctx, sid, now), localExtra(ctx, sid, now))
+    }
+
+    /** The lock cover (policy.locked) or the rest cover (screen time is up) is up. */
+    fun coverUp(ctx: Context): Boolean = policy(ctx).optBoolean("locked", false) || !timeState(ctx).allowed
+
+    /** Parent menu (after the PIN): 30 more minutes for the active child on this tablet, from the end of any extra time running. */
+    fun grantLocalExtra(ctx: Context, forMs: Long = DeviceTime.EXTRA_MS): Long? {
+        val sid = Prefs.activeStudentId(ctx) ?: return null
+        val now = System.currentTimeMillis()
+        val s = timeState(ctx, now)
+        val from = if (s.why == "extra") maxOf(now, s.until ?: now) else now
+        val until = from + forMs
+        prefs(ctx).edit().putString(KEY_LOCAL_EXTRA, JSONObject().put("sid", sid).put("until", until).toString()).commit()
+        KioskLog.add(ctx, "deviceTime", "Parent PIN: 30 more minutes for $sid until ${Date(until)}")
+        enforce(ctx)
+        reportSoon()
+        return until
+    }
+
+    private fun timeChanged(ctx: Context, s: DeviceTime.State) {
+        val key = "${Prefs.activeStudentId(ctx)}|${s.allowed}|${s.why}|${s.next}|${s.warn}|${s.until}"
+        if (key != lastTimeKey) {
+            val wasBlocked = lastTimeKey?.split("|")?.getOrNull(1) == "false"
+            lastTimeKey = key
+            handler.post { timeListeners.toList().forEach { runCatching { it(s) } } }
+            if (wasBlocked == s.allowed) {
+                KioskLog.add(ctx, "deviceTime", if (s.allowed) "Screen time open (${s.why})" else "Screen time up (${s.why}), next ${s.next?.let { Date(it) } ?: "—"}")
+                reportSoon()
+            }
+        }
+        if (s.allowed && s.warn && s.until != null && warnedFor != s.until) {
+            warnedFor = s.until
+            val left = maxOf(1, ceil((s.until - System.currentTimeMillis()) / 60_000.0).toInt())
+            val app = ctx.applicationContext
+            handler.post {
+                timeWarnListeners.toList().forEach { runCatching { it(left) } }
+                // In an Android app the kiosk banner is not visible: a toast instead.
+                if (!MainActivity.inForeground) android.widget.Toast.makeText(app, LockScreen.warningText(left), android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     fun allowedPackages(ctx: Context, now: Long = System.currentTimeMillis()): Set<String> =
@@ -308,10 +381,13 @@ object DeviceSync {
      * when an app it opened (or any app that was allowed) is no longer allowed. Safe to call any time.
      */
     fun enforce(ctx: Context) {
+        ScreenTime.tick(ctx)		// count up to now (and stop counting while a cover is up)
         val now = System.currentTimeMillis()
+        val time = timeState(ctx, now)
         val states = appStates(ctx, now)
         val allowed = states.filterValues { it.allowed }.keys
-        scheduleCheck(ctx, now, states)
+        scheduleCheck(ctx, now, states, time)
+        timeChanged(ctx, time)
         if (allowed != lastAllowed) appsListeners.toList().forEach { runCatching { it(allowed) } }
         if (!KioskPolicy.isDeviceOwner(ctx)) {
             enforcementNote = if (states.isEmpty()) "" else "Allowed apps not enforced: app is not device owner"
@@ -333,7 +409,7 @@ object DeviceSync {
      * allowed app and, while an app opened from the kiosk is in front, its minutes running out and the next
      * local midnight (new day, new budgets). A minute before that app runs out, it fires early for a warning.
      */
-    private fun scheduleCheck(ctx: Context, now: Long, states: Map<String, Rules.State>) {
+    private fun scheduleCheck(ctx: Context, now: Long, states: Map<String, Rules.State>, time: DeviceTime.State? = null) {
         val times = states.values.filter { it.allowed }.mapNotNull { it.until }.toMutableList()
         var kickAt: Long? = null
         val openPkg = AppUsage.openPkg(ctx)
@@ -348,6 +424,13 @@ object DeviceSync {
             if (kickAt != null) times += kickAt
         }
         times += nextWindowStart(ctx, now) ?: Long.MAX_VALUE // so an opening window updates lock task and kiosk.on('apps')
+        // Screen time: when it runs out (and its warning), or when a blocked child may use the tablet again.
+        if (time != null && time.allowed && time.until != null && time.why != "parent" && time.why != "open") {
+            times += time.until
+            val warnMin = (policy(ctx).optJSONObject("deviceTime")?.opt("warnMinutes") as? Number)?.toLong() ?: DeviceTime.WARN_MINUTES.toLong()
+            if (time.ends) times += time.until - warnMin * 60_000L
+        }
+        if (time != null && !time.allowed) time.next?.let { times += it }
         val at = times.filter { it > now && it != Long.MAX_VALUE }.minOrNull()
         val warn = at != null && at == kickAt && at - now > 90_000
         scheduleAlarm(ctx, if (warn) at!! - 60_000 else at, warn)
@@ -483,6 +566,8 @@ object DeviceSync {
             "features" to RemoteCommands.FEATURES,
             "policyRev" to policyRev(ctx),
             "policySource" to policySource(ctx),
+            "deviceTimeNow" to timeState(ctx).let { s -> mapOf("studentId" to (Prefs.activeStudentId(ctx) ?: ""), "allowed" to s.allowed, "why" to s.why,
+                "next" to (s.next ?: 0L), "until" to (s.until ?: 0L)) },
         )
     }
 
@@ -519,6 +604,12 @@ object DeviceSync {
         val byChildHash = sha256(byChild.toString())
         val sendByChild = p.getString(KEY_CHILD_USAGE_HASH, null) != byChildHash
         if (sendByChild) fields["status.appUsageByChild"] = byChild
+        // Screen time per child per day on this tablet (the parent's other devices add it to their daily maximum).
+        ScreenTime.tick(ctx)
+        val time = ScreenTime.statusMap(ctx)
+        val timeHash = sha256(time.toString())
+        val sendTime = p.getString(KEY_TIME_HASH, null) != timeHash
+        if (sendTime) fields["status.deviceTime"] = time
         // Device event log (KioskLog): the newest entries plus why the kiosk last left the screen unexpectedly.
         val log = KioskLog.forUpload(ctx)
         val lastExit = KioskLog.lastExit(ctx)
@@ -536,6 +627,7 @@ object DeviceSync {
                 if (sendUsage) p.edit().putString(KEY_USAGE_HASH, usageHash).apply()
                 if (sendByChild) p.edit().putString(KEY_CHILD_USAGE_HASH, byChildHash).apply()
                 if (sendLog) p.edit().putString(KEY_LOG_HASH, logHash).apply()
+                if (sendTime) p.edit().putString(KEY_TIME_HASH, timeHash).apply()
             }
             .addOnFailureListener { e -> Log.w(TAG, "Status update failed", e) }
     }

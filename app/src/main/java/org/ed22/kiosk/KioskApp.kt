@@ -24,11 +24,14 @@ class KioskApp : Application() {
             object : BroadcastReceiver() {
                 private var pausedPkg: String? = null
                 override fun onReceive(context: Context, intent: Intent) {
+                    // Screen time counts only while the screen is on.
+                    ScreenTime.tick(context)
                     if (intent.action == Intent.ACTION_SCREEN_OFF) {
                         pausedPkg = AppUsage.openPkg(context) ?: pausedPkg
                         AppUsage.end(context)
                         return
                     }
+                    DeviceSync.enforce(context)
                     // Screen back on: make sure the kiosk is still the one in front.
                     KioskWatchdog.checkSoon(context, 2_000)
                     val pkg = pausedPkg ?: return

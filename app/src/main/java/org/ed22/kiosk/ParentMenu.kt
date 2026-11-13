@@ -65,35 +65,37 @@ object ParentMenu {
     }
 
     private fun showMenu(activity: MainActivity) {
-        val items = arrayOf(
-            "Exit kiosk mode",
-            "Wi-Fi",
-            "Open Wi-Fi settings",
-            "Reload start page",
-            "Change PIN",
-            "Updates (${BuildConfig.VERSION_NAME})",
-            "Account",
-            "Remove kiosk lock (allow uninstall)",
+        // Screen time first when the active child has any (the parent is often here because the rest cover is up).
+        val sid = Prefs.activeStudentId(activity)
+        val time = if (DeviceTime.limited(DeviceSync.policy(activity).optJSONObject("deviceTime"), sid)) DeviceSync.timeState(activity) else null
+        val items = listOfNotNull<Pair<String, () -> Unit>>(
+            time?.let { (if (it.allowed) "Screen time: 30 more minutes" else "Screen time is up: give 30 more minutes") to { giveMoreTime(activity) } },
+            "Exit kiosk mode" to { exit(activity, null) },
+            "Wi-Fi" to { LockWifiDialog.showParentControls(activity) },
+            "Open Wi-Fi settings" to { exit(activity, Intent(Settings.ACTION_WIFI_SETTINGS)) },
+            "Reload start page" to { activity.goHome() },
+            "Change PIN" to {
+                activity.startActivity(Intent(activity, PinSetupActivity::class.java).putExtra(PinSetupActivity.EXTRA_CHANGE, true))
+            },
+            "Updates (${BuildConfig.VERSION_NAME})" to { showUpdates(activity) },
+            "Account" to { showAccount(activity) },
+            "Remove kiosk lock (allow uninstall)" to { confirmRemove(activity) },
         )
         AlertDialog.Builder(activity)
             .setTitle("Parent menu")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> exit(activity, null)
-                    1 -> LockWifiDialog.showParentControls(activity)
-                    2 -> exit(activity, Intent(Settings.ACTION_WIFI_SETTINGS))
-                    3 -> activity.goHome()
-                    4 -> activity.startActivity(
-                        Intent(activity, PinSetupActivity::class.java).putExtra(PinSetupActivity.EXTRA_CHANGE, true)
-                    )
-                    5 -> showUpdates(activity)
-                    6 -> showAccount(activity)
-                    7 -> confirmRemove(activity)
-                }
-            }
+            .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }
             .setNegativeButton("Close", null)
             .create()
             .present(activity)
+    }
+
+    /** The same 30 minutes as "+30 min" in the device manager, granted here with the PIN (works offline). */
+    private fun giveMoreTime(activity: MainActivity) {
+        val until = DeviceSync.grantLocalExtra(activity) ?: return toast(activity, "No child is using this tablet.")
+        activity.updateLockOverlay()
+        val clock = LockScreen.clockWithAmPm(java.time.Instant.ofEpochMilli(until).atZone(java.time.ZoneId.systemDefault()).toLocalTime(),
+            !android.text.format.DateFormat.is24HourFormat(activity))
+        toast(activity, "30 more minutes, until $clock.")
     }
 
     private fun showUpdates(activity: MainActivity) {

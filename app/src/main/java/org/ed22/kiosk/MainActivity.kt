@@ -93,6 +93,10 @@ class MainActivity : AppCompatActivity() {
     private var lockDate: android.widget.TextView? = null
     private var lockBattery: android.widget.TextView? = null
     private var lockWifi: android.widget.TextView? = null
+    private var lockMessage: android.widget.TextView? = null
+    private var lockSub: android.widget.TextView? = null
+    private var timeBanner: View? = null
+    private val hideTimeBanner = Runnable { removeTimeBanner() }
     private var lockWifiCallback: ConnectivityManager.NetworkCallback? = null
     private val lockScreenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -102,7 +106,7 @@ class MainActivity : AppCompatActivity() {
                 LockIdle.isScreenOff(intent?.action) -> applyLockIdle(lockIdle.screenOff())
                 LockIdle.isScreenOn(intent?.action) -> applyLockIdle(lockIdle.screenOn(SystemClock.uptimeMillis()))
                 LockScreen.isBatteryAction(intent?.action) -> refreshLockBattery()
-                LockScreen.isTimeAction(intent?.action) -> refreshLockClock()
+                LockScreen.isTimeAction(intent?.action) -> { refreshLockClock(); refreshCoverText() }
                 LockWifi.isWifiAction(intent?.action) -> refreshLockWifi()
             }
         }
@@ -158,6 +162,9 @@ class MainActivity : AppCompatActivity() {
         },
     )
     private val policyListener: (org.json.JSONObject) -> Unit = { updateLockOverlay(); refreshAppsButton() }
+    /** Screen time: the rest cover follows the active child's state; the 5-minute warning is a banner over the page. */
+    private val timeListener: (DeviceTime.State) -> Unit = { updateLockOverlay() }
+    private val timeWarnListener: (Int) -> Unit = { left -> showTimeWarning(left) }
 
     private var appsButton: android.widget.TextView? = null
 
@@ -203,6 +210,8 @@ class MainActivity : AppCompatActivity() {
         hideSystemUi()
         current = this
         DeviceSync.addListener(policyListener)
+        DeviceSync.timeListeners += timeListener
+        DeviceSync.timeWarnListeners += timeWarnListener
         updateLockOverlay()
         // Native Apps button removed (2026-11-02): /mobile shows its own apps icon. addAppsButton() kept unused.
 
@@ -420,6 +429,9 @@ class MainActivity : AppCompatActivity() {
         }
         if (current === this) current = null
         DeviceSync.removeListener(policyListener)
+        DeviceSync.timeListeners -= timeListener
+        DeviceSync.timeWarnListeners -= timeWarnListener
+        handler.removeCallbacks(hideTimeBanner)
         removeLockOverlay()
         closePopup()
         if (::webView.isInitialized) {
@@ -476,10 +488,14 @@ class MainActivity : AppCompatActivity() {
             handler.post { if (!isDestroyed) updateLockOverlay() }
             return
         }
-        if (isDestroyed || !DeviceSync.policy(this).optBoolean("locked", false)) {
+        // policy.locked, or the active child's screen time is up (the rest cover: when they can use it next).
+        if (isDestroyed || !DeviceSync.coverUp(this)) {
+            if (lockOverlay != null) ScreenTime.tick(this, covered = false)
             removeLockOverlay()
             return
         }
+        if (lockOverlay == null) ScreenTime.tick(this, covered = true)
+        removeTimeBanner()
         showLockOverlay()
     }
 
@@ -512,6 +528,12 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(android.graphics.Color.WHITE)
                 gravity = android.view.Gravity.CENTER
             }
+            val sub = android.widget.TextView(this).apply {
+                textSize = 20f
+                setTextColor(0xFFFFE082.toInt())
+                gravity = android.view.Gravity.CENTER
+                visibility = View.GONE
+            }
             val wifi = android.widget.TextView(this).apply {
                 textSize = 18f
                 setTextColor(android.graphics.Color.WHITE)
@@ -535,6 +557,7 @@ class MainActivity : AppCompatActivity() {
                 addView(battery, android.widget.LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(14) })
                 addView(wifi, android.widget.LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(16) })
                 addView(message, android.widget.LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(28) })
+                addView(sub, android.widget.LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(10) })
             }
             val overlay = android.widget.FrameLayout(this).apply {
                 setBackgroundColor(LockScreen.backgroundColor)
@@ -553,12 +576,15 @@ class MainActivity : AppCompatActivity() {
             lockDate = date
             lockBattery = battery
             lockWifi = wifi
+            lockMessage = message
+            lockSub = sub
             lockOverlay = overlay
             root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
         }
         refreshLockClock()
         refreshLockBattery()
         refreshLockWifi()
+        refreshCoverText()
         lockListeners.onShown()
         lockOverlay?.bringToFront()
         applyLockIdle(lockIdle.coverShown(SystemClock.uptimeMillis()))
@@ -579,6 +605,8 @@ class MainActivity : AppCompatActivity() {
         lockDate = null
         lockBattery = null
         lockWifi = null
+        lockMessage = null
+        lockSub = null
         if (::root.isInitialized && overlay.parent === root) root.removeView(overlay)
         syncKeepScreenOn()
     }
@@ -589,6 +617,45 @@ class MainActivity : AppCompatActivity() {
         val locale = Locale.getDefault()
         lockClock?.text = LockScreen.clock(now.toLocalTime(), !DateFormat.is24HourFormat(this), locale)
         lockDate?.text = LockScreen.date(now.toLocalDate(), locale)
+    }
+
+    /** "This device is locked", or the rest cover's title + when the child can use the tablet next. */
+    private fun refreshCoverText() {
+        val locked = DeviceSync.policy(this).optBoolean("locked", false)
+        val t = LockScreen.coverText(locked, DeviceSync.timeState(this), System.currentTimeMillis(), java.time.ZoneId.systemDefault(),
+            !DateFormat.is24HourFormat(this), Locale.getDefault())
+        if (lockMessage?.text?.toString() != t.first) lockMessage?.text = t.first
+        lockSub?.text = t.second ?: ""
+        lockSub?.visibility = if (t.second == null) View.GONE else View.VISIBLE
+    }
+
+    /** The screen-time warning: a banner at the top of the kiosk for 15 s (not over a cover). */
+    fun showTimeWarning(minutesLeft: Int) {
+        if (!::root.isInitialized || isDestroyed || lockOverlay != null) return
+        if (Looper.myLooper() != Looper.getMainLooper()) { handler.post { showTimeWarning(minutesLeft) }; return }
+        removeTimeBanner()
+        val d = resources.displayMetrics.density
+        val banner = android.widget.TextView(this).apply {
+            text = "\u23F3  " + LockScreen.warningText(minutesLeft)
+            textSize = 20f
+            setTextColor(0xFF3E2723.toInt())
+            gravity = android.view.Gravity.CENTER
+            setPadding((20 * d).toInt(), (12 * d).toInt(), (20 * d).toInt(), (12 * d).toInt())
+            background = android.graphics.drawable.GradientDrawable().apply { cornerRadius = 100 * d; setColor(0xF2FFD54F.toInt()) }
+            elevation = 8 * d
+            setOnClickListener { removeTimeBanner() }
+        }
+        root.addView(banner, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL).apply { topMargin = (24 * d).toInt() })
+        timeBanner = banner
+        handler.removeCallbacks(hideTimeBanner)
+        handler.postDelayed(hideTimeBanner, LockScreen.WARNING_SHOW_MS)
+    }
+
+    private fun removeTimeBanner() {
+        val b = timeBanner ?: return
+        timeBanner = null
+        if (::root.isInitialized && b.parent === root) root.removeView(b)
     }
 
     private fun refreshLockBattery() {
