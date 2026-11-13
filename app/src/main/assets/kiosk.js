@@ -126,6 +126,9 @@
       set: function (policy) { return call('policySet', { policy: policy }); },
       get: method('policyGet')
     },
+    // The active child's screen time on this tablet: {allowed, why, left, until, next, ends, warn}. The tablet enforces it;
+    // kiosk.on('deviceTime', fn) fires on changes and kiosk.on('deviceTimeWarning', fn) a few minutes before it runs out.
+    deviceTime: method('deviceTime'),
     // The child using the tablet (null = parent mode), for the allowed-apps rules; works offline.
     // An id string, or {studentId}. Objects are not String()'d (that would become "[object Object]").
     // An object with no studentId key is forwarded without that field so the native side leaves the active child unchanged.

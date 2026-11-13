@@ -14,6 +14,8 @@ object RemoteCommands {
         "openToolFront",
         // status.log (recent device events) and status.lastExit {at, why}.
         "deviceLog",
+        // policy.deviceTime: device-wide allowed hours + daily maximum per child (rest cover, 5-minute warning, status.deviceTime).
+        "deviceTime",
     )
 
     /** Commands with an epoch-ms id that are only run while fresh and while the device is not locked. */
