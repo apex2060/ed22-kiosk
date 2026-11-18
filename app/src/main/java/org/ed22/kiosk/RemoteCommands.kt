@@ -16,10 +16,15 @@ object RemoteCommands {
         "deviceLog",
         // policy.deviceTime: device-wide allowed hours + daily maximum per child (rest cover, 5-minute warning, status.deviceTime).
         "deviceTime",
+        // Ring my device handled natively (policy.command ring / ringStop): /mobile skips its own web ring when this is listed.
+        "ringNative",
     )
 
     /** Commands with an epoch-ms id that are only run while fresh and while the device is not locked. */
-    val TIMED_TYPES = setOf("openApp", "openTool")
+    val TIMED_TYPES = setOf("openApp", "openTool", "ring", "ringStop")
+
+    /** Timed commands that also run while the device is locked (a lost device must ring). */
+    val RING_TYPES = setOf("ring", "ringStop")
 
     /** [run] = do it; [handled] = remember the id so it never runs again; [reason] for the log when not run. */
     data class Decision(val run: Boolean, val handled: Boolean, val reason: String)
@@ -38,6 +43,7 @@ object RemoteCommands {
         if (type !in TIMED_TYPES) return Decision(true, true, "")
         val sent = id.toLongOrNull() ?: return Decision(false, true, "id is not epoch ms")
         if (nowMs - sent > OPEN_APP_MAX_AGE_MS) return Decision(false, true, "too old (${(nowMs - sent) / 1000}s)")
+        if (type in RING_TYPES) return Decision(true, true, "")
         if (locked) return Decision(false, true, "device is locked")
         // openTool: the page opens the tool (it dedupes by id); natively it only brings the kiosk to the front.
         if (type == "openTool") return Decision(true, true, "")
