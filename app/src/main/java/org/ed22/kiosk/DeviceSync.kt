@@ -254,8 +254,24 @@ object DeviceSync {
                     (AppUsage.openPkg(app)?.let { " (was in $it)" } ?: ""))
                 openKiosk(app)
             }
+            "ring" -> onMain { ring(RingDevice.start(app), cmd) }
+            "ringStop" -> onMain { RingDevice.stop("ringStop"); ring(null, cmd) }
             else -> Log.w(TAG, "Unknown command type: ${cmd.optString("type")}")
         }
+    }
+
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else handler.post(block)
+    }
+
+    /** Ring my device: reports status.remote {id, ok, why, at} (the shape /mobile's js.remote.report writes) and logs it. */
+    private fun ring(why: String?, cmd: JSONObject) {
+        val id = RemoteCommands.id(cmd) ?: return
+        val docId = deviceDocId(app) ?: return
+        if (cmd.optString("type") == "ring") KioskLog.add(app, "ring", if (why == null) "Ringing (parent's Ring my device)" else "Ring failed: $why")
+        if (auth.currentUser == null) return
+        doc(docId).update("status.remote", RingPlan.remote(id, why == null, why ?: "", System.currentTimeMillis()))
+            .addOnFailureListener { e -> Log.w(TAG, "status.remote update failed", e) }
     }
 
     fun openKiosk(ctx: Context) {

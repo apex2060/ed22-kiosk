@@ -120,6 +120,8 @@ class MainActivity : AppCompatActivity() {
     }
     private val lockSleepRunnable = Runnable {
         if (isDestroyed || !lockIdle.sleepPending) return@Runnable
+        // Ring my device keeps the screen on while it rings; the idle timer starts over.
+        if (RingDevice.active) { applyLockIdle(lockIdle.touch(SystemClock.uptimeMillis())); return@Runnable }
         android.util.Log.i("MainActivity", "Lock cover idle: turning the screen off")
         val ok = KioskPolicy.sleepScreen(this)
         if (!ok) android.util.Log.w("MainActivity", "Lock cover idle: this device cannot turn the screen off")
@@ -251,6 +253,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        RingDevice.attach()
         AppUsage.end(this)
         if (!::webView.isInitialized) return
         inForeground = true
@@ -455,6 +458,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // Ring my device: a touch ends the ring and is not passed on.
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && RingDevice.onTouch()) return true
         // Watch for the parent gesture without stealing the touch from the page.
         if (ev.actionMasked == MotionEvent.ACTION_DOWN && ::cornerTaps.isInitialized) {
             cornerTaps.onDown(ev.x, ev.y, window.decorView.height)
