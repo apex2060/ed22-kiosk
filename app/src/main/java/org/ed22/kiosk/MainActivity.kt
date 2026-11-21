@@ -265,6 +265,7 @@ class MainActivity : AppCompatActivity() {
         // Timers on the offline page may have been throttled while we were in the background.
         if (showingOffline && NetworkWatch.online) onNetworkBack()
         KioskPolicy.startLockTask(this)
+        runCatching { ScreenLock.checkChanged(this) }
         webView.onResume()
         bridge.onResume()
         refreshAppsButton()

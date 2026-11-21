@@ -154,6 +154,16 @@ enum class ParentPinResult { Missing, Lockout, Cancel, Wrong, Ok }
  */
 fun parentMenuGranted(result: ParentPinResult): Boolean = result == ParentPinResult.Ok
 
+enum class PinPromptOutcome { Granted, Empty, Wrong, Locked }
+
+/** What the parent PIN prompt does after Unlock. Only a verified PIN ([PinStore.Check.OK]) opens the parent menu. */
+fun pinPromptOutcome(typed: String, check: PinStore.Check): PinPromptOutcome = when {
+    check == PinStore.Check.LOCKED -> PinPromptOutcome.Locked
+    check == PinStore.Check.OK && typed.isNotEmpty() -> PinPromptOutcome.Granted
+    typed.isEmpty() -> PinPromptOutcome.Empty
+    else -> PinPromptOutcome.Wrong
+}
+
 /** No dialog when there is no stored PIN or the lockout is active. Null means ask for the PIN. */
 fun parentPromptKind(hasPin: Boolean, lockoutRemainingMs: Long): ParentPinResult? = when {
     !hasPin -> ParentPinResult.Missing

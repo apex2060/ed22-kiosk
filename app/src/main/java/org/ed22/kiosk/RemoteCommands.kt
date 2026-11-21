@@ -18,6 +18,8 @@ object RemoteCommands {
         "deviceTime",
         // Ring my device handled natively (policy.command ring / ringStop): /mobile skips its own web ring when this is listed.
         "ringNative",
+        // policy.command clearScreenLock + status.screenLock {secure, tokenActive, lastChange, lastCleared}.
+        "screenLock",
     )
 
     /** Commands with an epoch-ms id that are only run while fresh and while the device is not locked. */

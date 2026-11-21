@@ -43,19 +43,26 @@ object ParentMenu {
         val timeout = Runnable { if (dialog.isShowing) dialog.dismiss() }
         dialog.setOnShowListener {
             input.requestFocus()
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                when (PinStore.verify(activity, input.text.toString())) {
-                    PinStore.Check.OK -> {
+            val unlock = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            unlock.setOnClickListener {
+                val typed = input.text.toString()
+                // Fail closed: anything but a verified PIN keeps the prompt (and the kiosk) where it is.
+                val check = runCatching { PinStore.verify(activity, typed) }.getOrDefault(PinStore.Check.WRONG)
+                when (pinPromptOutcome(typed, check)) {
+                    PinPromptOutcome.Granted -> {
                         dialog.dismiss()
-                        if (parentMenuGranted(ParentPinResult.Ok)) showMenu(activity)
+                        showMenu(activity)
                     }
-                    PinStore.Check.WRONG -> {
+                    PinPromptOutcome.Empty -> input.error = "Enter the parent PIN"
+                    PinPromptOutcome.Wrong -> {
                         input.text.clear()
                         input.error = "Wrong PIN"
                     }
-                    PinStore.Check.LOCKED -> {
+                    PinPromptOutcome.Locked -> {
+                        input.text.clear()
+                        val secs = (PinStore.lockoutRemainingMs(activity) + 999) / 1000
                         dialog.dismiss()
-                        toast(activity, "Too many wrong PINs. Try again in a minute.")
+                        toast(activity, "Too many wrong PINs. Try again in $secs seconds.")
                     }
                 }
             }
@@ -78,6 +85,7 @@ object ParentMenu {
             "Change PIN" to {
                 activity.startActivity(Intent(activity, PinSetupActivity::class.java).putExtra(PinSetupActivity.EXTRA_CHANGE, true))
             },
+            ScreenLock.isSecure(activity).takeIf { it }?.let { "Remove phone screen lock" to { removeScreenLock(activity) } },
             "Updates (${BuildConfig.VERSION_NAME})" to { showUpdates(activity) },
             "Account" to { showAccount(activity) },
             "Remove kiosk lock (allow uninstall)" to { confirmRemove(activity) },
@@ -88,6 +96,13 @@ object ParentMenu {
             .setNegativeButton("Close", null)
             .create()
             .present(activity)
+    }
+
+    /** Clears a phone PIN/pattern/password set behind the kiosk (only possible once the reset token is active). */
+    private fun removeScreenLock(activity: MainActivity) {
+        val r = ScreenLock.clear(activity, "parent menu")
+        toast(activity, if (r.ok) "Phone screen lock removed." else "Could not remove the screen lock: ${r.why}")
+        DeviceSync.reportStatus(activity)
     }
 
     /** The same 30 minutes as "+30 min" in the device manager, granted here with the PIN (works offline). */

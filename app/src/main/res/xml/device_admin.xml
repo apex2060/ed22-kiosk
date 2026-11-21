@@ -2,5 +2,9 @@
 <device-admin>
     <uses-policies>
         <force-lock />
+        <!-- onPasswordChanged and resetPasswordWithToken (ScreenLock). -->
+        <limit-password />
+        <watch-login />
+        <reset-password />
     </uses-policies>
 </device-admin>
