@@ -679,7 +679,10 @@ object DeviceSync {
         // Lock task packages follow the rules as of now (a window may have just opened).
         KioskPolicy.setLockTaskPackages(ctx, allowedPackages(ctx))
         ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        AppUsage.start(ctx, pkg)
+        val startedAt = AppUsage.start(ctx, pkg)
+        // The app never took the screen (the kiosk is still in front): drop that session instead of counting it until the screen goes off.
+        val app = ctx.applicationContext
+        handler.postDelayed({ runCatching { AppUsage.dropIfBounced(app, pkg, startedAt) } }, AppUsage.BOUNCE_CHECK_MS)
         enforce(ctx) // arms the alarm for this app's window / minutes
     }
 

@@ -20,6 +20,9 @@ object RemoteCommands {
         "ringNative",
         // policy.command clearScreenLock + status.screenLock {secure, tokenActive, lastChange, lastCleared}.
         "screenLock",
+        // status.appUsageByChild entries carry lastMs (when the app was last used that day); launches under 15 s are left out of
+        // the report (still counted for limits) (AppUsage).
+        "usageLastUsed",
     )
 
     /** Commands with an epoch-ms id that are only run while fresh and while the device is not locked. */
