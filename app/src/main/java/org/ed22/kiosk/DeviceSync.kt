@@ -256,6 +256,12 @@ object DeviceSync {
             }
             "ring" -> onMain { ring(RingDevice.start(app), cmd) }
             "ringStop" -> onMain { RingDevice.stop("ringStop"); ring(null, cmd) }
+            // Parent's "remove phone screen lock": clears a PIN/pattern set behind the kiosk, if the reset token is active.
+            "clearScreenLock" -> {
+                val r = ScreenLock.clear(app, "remote command")
+                reportRemote(cmd, r.ok, r.why)
+                reportStatus(app)
+            }
             else -> Log.w(TAG, "Unknown command type: ${cmd.optString("type")}")
         }
     }
@@ -271,6 +277,15 @@ object DeviceSync {
         if (cmd.optString("type") == "ring") KioskLog.add(app, "ring", if (why == null) "Ringing (parent's Ring my device)" else "Ring failed: $why")
         if (auth.currentUser == null) return
         doc(docId).update("status.remote", RingPlan.remote(id, why == null, why ?: "", System.currentTimeMillis()))
+            .addOnFailureListener { e -> Log.w(TAG, "status.remote update failed", e) }
+    }
+
+    /** status.remote {id, ok, why, at} for a command other than ring. */
+    private fun reportRemote(cmd: JSONObject, ok: Boolean, why: String) {
+        val id = RemoteCommands.id(cmd) ?: return
+        val docId = deviceDocId(app) ?: return
+        if (auth.currentUser == null) return
+        doc(docId).update("status.remote", RingPlan.remote(id, ok, why, System.currentTimeMillis()))
             .addOnFailureListener { e -> Log.w(TAG, "status.remote update failed", e) }
     }
 
@@ -552,6 +567,7 @@ object DeviceSync {
 
     fun launch(ctx: Context, pkg: String) {
         if (!isAllowed(ctx, pkg)) throw IllegalStateException("$pkg is not allowed right now")
+        if (EscapeGuard.isBlocked(pkg)) throw IllegalStateException("$pkg (system settings) is never opened from the kiosk")
         val intent = ctx.packageManager.getLaunchIntentForPackage(pkg)
             ?: throw IllegalArgumentException("$pkg has no launcher activity")
         // Lock task packages follow the rules as of now (a window may have just opened).
@@ -580,6 +596,7 @@ object DeviceSync {
             "policyNote" to enforcementNote,
             "timeZone" to ZoneId.systemDefault().id,
             "features" to RemoteCommands.FEATURES,
+            "screenLock" to ScreenLock.status(ctx),
             "policyRev" to policyRev(ctx),
             "policySource" to policySource(ctx),
             "deviceTimeNow" to timeState(ctx).let { s -> mapOf("studentId" to (Prefs.activeStudentId(ctx) ?: ""), "allowed" to s.allowed, "why" to s.why,

@@ -78,6 +78,7 @@ object ParentMenu {
             "Change PIN" to {
                 activity.startActivity(Intent(activity, PinSetupActivity::class.java).putExtra(PinSetupActivity.EXTRA_CHANGE, true))
             },
+            ScreenLock.isSecure(activity).takeIf { it }?.let { "Remove phone screen lock" to { removeScreenLock(activity) } },
             "Updates (${BuildConfig.VERSION_NAME})" to { showUpdates(activity) },
             "Account" to { showAccount(activity) },
             "Remove kiosk lock (allow uninstall)" to { confirmRemove(activity) },
@@ -88,6 +89,13 @@ object ParentMenu {
             .setNegativeButton("Close", null)
             .create()
             .present(activity)
+    }
+
+    /** Clears a phone PIN/pattern/password set behind the kiosk (only possible once the reset token is active). */
+    private fun removeScreenLock(activity: MainActivity) {
+        val r = ScreenLock.clear(activity, "parent menu")
+        toast(activity, if (r.ok) "Phone screen lock removed." else "Could not remove the screen lock: ${r.why}")
+        DeviceSync.reportStatus(activity)
     }
 
     /** The same 30 minutes as "+30 min" in the device manager, granted here with the PIN (works offline). */

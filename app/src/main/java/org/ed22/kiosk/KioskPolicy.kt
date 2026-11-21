@@ -26,6 +26,10 @@ object KioskPolicy {
         // No autofill service: keyboards stop offering saved passwords, whose "Manage passwords" entry opened
         // Google Password Manager inside the kiosk's lock task (see EscapeGuard).
         UserManager.DISALLOW_AUTOFILL,
+        // No installing/removing certificates or credential storage, and no adding/removing accounts, while the kiosk
+        // owns the screen. Lifted with the others when a parent pauses the kiosk.
+        UserManager.DISALLOW_CONFIG_CREDENTIALS,
+        UserManager.DISALLOW_MODIFY_ACCOUNTS,
     )
 
     val AUTO_GRANT = buildList {
@@ -93,13 +97,15 @@ object KioskPolicy {
             safely("auto time") { dpm.setAutoTimeRequired(admin, true) }
         }
         AUTO_GRANT.forEach { grantPermission(ctx, it) }
+        safely("screen lock token") { ScreenLock.ensureToken(ctx) }
     }
 
     /** Lock task allowlist: this app, [LOCK_TASK_EXTRAS] and the apps the device doc currently allows. */
     fun setLockTaskPackages(ctx: Context, allowed: Collection<String>) {
         if (!isDeviceOwner(ctx)) return
         safely("lock task packages") {
-            val packages = (listOf(ctx.packageName) + LOCK_TASK_EXTRAS + allowed).distinct()
+            // Settings and Play services never get lock task, even if a parent allowed one (EscapeGuard.ALWAYS_BLOCKED).
+            val packages = (listOf(ctx.packageName) + LOCK_TASK_EXTRAS + EscapeGuard.lockTaskSafe(allowed)).distinct()
             dpm(ctx).setLockTaskPackages(admin(ctx), packages.toTypedArray())
         }
     }

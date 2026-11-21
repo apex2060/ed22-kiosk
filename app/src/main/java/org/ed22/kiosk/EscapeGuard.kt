@@ -32,6 +32,29 @@ object EscapeGuard {
     )
 
     /**
+     * Android Settings, Google settings and Google Play services (Password Manager, Google account screens): never
+     * kept open over the kiosk, never in the lock task allowlist and never opened as an allowed app, even when a
+     * parent lists one, because from there a child can set a phone screen lock or change accounts (2026-11-20).
+     * The parent menu's own Wi-Fi panel is inside the kiosk and is not affected; "Open Wi-Fi settings" pauses the
+     * kiosk first.
+     */
+    val ALWAYS_BLOCKED: Set<String> = setOf(
+        "com.android.settings",
+        "com.google.android.settings",
+        "com.android.settings.intelligence",
+        "com.google.android.settings.intelligence",
+        "com.google.android.gms",
+        "com.google.android.apps.wellbeing",
+        "com.samsung.android.app.settings.bixby",
+        "com.android.credentialmanager",
+    )
+
+    /** [allowed] without the [ALWAYS_BLOCKED] packages (what lock task and launch() may use). */
+    fun lockTaskSafe(allowed: Collection<String>): List<String> = allowed.filter { it !in ALWAYS_BLOCKED }
+
+    fun isBlocked(pkg: String?): Boolean = pkg != null && pkg in ALWAYS_BLOCKED
+
+    /**
      * True when the activity on top of the kiosk's own task belongs to another app that the kiosk did not open
      * and is not waiting on, so the kiosk should close it and come back to the front.
      * [waitingOnResult]: a file chooser or permission request the kiosk started is still open; whatever the
@@ -44,8 +67,11 @@ object EscapeGuard {
         waitingOnResult: Boolean,
         ownsScreen: Boolean,
     ): Boolean {
-        if (!ownsScreen || waitingOnResult) return false
+        if (!ownsScreen) return false
         if (topPackage.isNullOrEmpty() || topPackage == ownPackage) return false
+        // Settings and Play services are closed even while a picker is open or if a parent allowed them.
+        if (topPackage in ALWAYS_BLOCKED) return true
+        if (waitingOnResult) return false
         if (topPackage in IN_TASK_SYSTEM) return false
         return topPackage !in allowedApps
     }

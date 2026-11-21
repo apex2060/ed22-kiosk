@@ -11,4 +11,9 @@ class KioskAdminReceiver : DeviceAdminReceiver() {
         KioskPolicy.apply(context)
         context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
+
+    /** A phone PIN / pattern / password was set or changed (see [ScreenLock]). */
+    override fun onPasswordChanged(context: Context, intent: Intent, user: android.os.UserHandle) {
+        ScreenLock.onPasswordChanged(context)
+    }
 }
