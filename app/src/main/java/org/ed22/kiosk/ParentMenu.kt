@@ -29,9 +29,10 @@ object ParentMenu {
             else -> Unit
         }
         val input = EditText(activity).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            inputType = EscapeGuard.PIN_INPUT_TYPE
             hint = "Parent PIN"
             filters = arrayOf(InputFilter.LengthFilter(8))
+            EscapeGuard.hardenSecretField(this)
         }
         val dialog = AlertDialog.Builder(activity)
             .setTitle("Parent menu")

@@ -208,6 +208,9 @@ class MainActivity : AppCompatActivity() {
         webView = WebView(this)
         root.addView(webView, FrameLayout.LayoutParams(MATCH, MATCH))
         setContentView(root)
+        // No autofill anywhere in the kiosk window (see EscapeGuard): no saved-password chips, no "Manage passwords".
+        window.decorView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        root.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUi()
         current = this
@@ -257,6 +260,7 @@ class MainActivity : AppCompatActivity() {
         AppUsage.end(this)
         if (!::webView.isInitialized) return
         inForeground = true
+        handler.removeCallbacks(foreignCheck)
         hideSystemUi()
         // Timers on the offline page may have been throttled while we were in the background.
         if (showingOffline && NetworkWatch.online) onNetworkBack()
@@ -390,7 +394,56 @@ class MainActivity : AppCompatActivity() {
             webView.onPause()
             bridge.onPause()
         }
+        scheduleForeignCheck()
         super.onPause()
+    }
+
+    private var foreignChecks = 0
+    private val foreignCheck = Runnable { checkForeignTop() }
+
+    /** Looks at the kiosk's task shortly after it loses the front (twice, for slow-starting screens). */
+    private fun scheduleForeignCheck() {
+        foreignChecks = 0
+        handler.removeCallbacks(foreignCheck)
+        handler.postDelayed(foreignCheck, FOREIGN_CHECK_MS)
+    }
+
+    /**
+     * Another app's screen opened inside the kiosk's own task (lock task mode lets those through), and the kiosk
+     * did not open it or wait on it: e.g. Google Password Manager from the keyboard's "Manage passwords". Close it
+     * and bring the kiosk back. Allowed apps open in their own task and are not affected.
+     */
+    private fun checkForeignTop() {
+        if (inForeground || isFinishing || isDestroyed) return
+        val top = try {
+            getSystemService(android.app.ActivityManager::class.java).appTasks
+                .mapNotNull { runCatching { it.taskInfo }.getOrNull() }
+                .firstOrNull { it.baseActivity?.className == MainActivity::class.java.name }
+                ?.topActivity
+        } catch (e: Exception) {
+            null
+        }
+        val reclaim = EscapeGuard.shouldReclaim(
+            topPackage = top?.packageName,
+            ownPackage = packageName,
+            allowedApps = runCatching { DeviceSync.allowedPackages(this) }.getOrDefault(emptySet()),
+            waitingOnResult = fileCallback != null || permissionInFlight,
+            ownsScreen = CrashGuard.shouldOwnScreen(this),
+        )
+        if (reclaim) {
+            KioskLog.add(this, "foreignScreen", "Closed ${top?.flattenToShortString()} that opened inside Little Explorer", important = true)
+            try {
+                // singleTask: starting the kiosk again finishes every activity above it in its task.
+                startActivity(
+                    Intent(this, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                )
+            } catch (e: Exception) {
+                KioskLog.add(this, "foreignScreen", "Could not return to the kiosk: ${e.javaClass.simpleName}")
+            }
+        } else if (top != null && top.packageName != packageName && ++foreignChecks < 2) {
+            handler.postDelayed(foreignCheck, FOREIGN_CHECK_MS * 3)
+        }
     }
 
     override fun onStart() {
@@ -435,6 +488,7 @@ class MainActivity : AppCompatActivity() {
         DeviceSync.timeListeners -= timeListener
         DeviceSync.timeWarnListeners -= timeWarnListener
         handler.removeCallbacks(hideTimeBanner)
+        handler.removeCallbacks(foreignCheck)
         removeLockOverlay()
         closePopup()
         if (::webView.isInitialized) {
@@ -796,6 +850,7 @@ class MainActivity : AppCompatActivity() {
     /** Settings shared by the main WebView and popup windows. */
     @SuppressLint("SetJavaScriptEnabled")
     private fun applySettings(view: WebView) {
+        EscapeGuard.hardenWebView(view)
         with(view.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -1071,4 +1126,5 @@ class MainActivity : AppCompatActivity() {
 }
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+private const val FOREIGN_CHECK_MS = 700L
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT

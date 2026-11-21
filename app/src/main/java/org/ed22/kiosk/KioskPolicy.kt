@@ -18,11 +18,14 @@ import android.util.Log
 object KioskPolicy {
     private const val TAG = "KioskPolicy"
 
-    private val RESTRICTIONS = listOf(
+    internal val RESTRICTIONS = listOf(
         UserManager.DISALLOW_SAFE_BOOT,
         UserManager.DISALLOW_FACTORY_RESET,
         UserManager.DISALLOW_ADD_USER,
         UserManager.DISALLOW_MOUNT_PHYSICAL_MEDIA,
+        // No autofill service: keyboards stop offering saved passwords, whose "Manage passwords" entry opened
+        // Google Password Manager inside the kiosk's lock task (see EscapeGuard).
+        UserManager.DISALLOW_AUTOFILL,
     )
 
     val AUTO_GRANT = buildList {
