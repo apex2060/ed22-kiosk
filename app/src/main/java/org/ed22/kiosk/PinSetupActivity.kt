@@ -24,6 +24,8 @@ class PinSetupActivity : AppCompatActivity() {
 
         val pin = findViewById<EditText>(R.id.pin)
         val confirm = findViewById<EditText>(R.id.confirm)
+        EscapeGuard.hardenSecretField(pin)
+        EscapeGuard.hardenSecretField(confirm)
         val error = findViewById<TextView>(R.id.error)
         if (changing) findViewById<TextView>(R.id.title).text = "Change parent PIN"
         if (!KioskPolicy.isDeviceOwner(this)) findViewById<View>(R.id.owner_warning).visibility = View.VISIBLE
