@@ -21,6 +21,14 @@ import java.util.TreeMap
  * For the allowed-apps rules it also keeps every session with its child: {pkg, studentId?, startMs, endMs}
  * (no studentId = parent mode), split at local midnight and when the active child changes, for [DAYS] days.
  * [usedMinutes] feeds the rule limits; [usageByChildMap] is `status.appUsageByChild` ([CHILD_DAYS] days).
+ *
+ * Usage accuracy (Ryan, Nov 20 2026):
+ * - A launched session shorter than [MIN_MS] (15 s) is not in the parent's report (no seconds, no open): a launch that bounces straight
+ *   back to the kiosk, a tap by mistake. It still counts for the allowed-apps limits from [RULES_MIN_MS] (2 s, as before), so short
+ *   bursts cannot dodge a limit. A launch the kiosk never left (the app did not come up) is dropped by [dropIfBounced] a few seconds later.
+ * - "Resumed" sessions (the screen woke with an app already open) are counted exactly as before: full length, from 2 s, on battery and
+ *   on the charger (Ryan, Nov 20 2026: "Screen on is counted").
+ * - [usageByChildMap] adds `lastMs` per app per day: when the newest counted use ended (epoch ms). Older servers read only seconds/opens.
  */
 object AppUsage {
     private const val TAG = "AppUsage"
@@ -31,7 +39,12 @@ object AppUsage {
     private const val KEY_SESSIONS = "sessions"
     private const val CHILD_DAYS = 7
     private const val DAYS = 14
-    private const val MIN_MS = 2_000L
+    /** Shorter sessions are left out of the parent's report (bounces back to the kiosk, mis-taps). Was 2 s. */
+    const val MIN_MS = 15_000L
+    /** Shorter sessions are not kept at all (also not for the rule limits): the old MIN_MS. */
+    const val RULES_MIN_MS = 2_000L
+    /** How long after a launch [dropIfBounced] checks that the kiosk actually left the screen. */
+    const val BOUNCE_CHECK_MS = 3_000L
     private const val MAX_MS = 12 * 3_600_000L
 
     private fun prefs(ctx: Context) = ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -42,12 +55,27 @@ object AppUsage {
      * the screen came back on: counted for the rules and appUsageByChild (no new open), not added to appUsage.
      */
     @Synchronized
-    fun start(ctx: Context, pkg: String, resumed: Boolean = false) {
+    fun start(ctx: Context, pkg: String, resumed: Boolean = false): Long {
         end(ctx)
-        val s = JSONObject().put("pkg", pkg).put("startMs", System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        val s = JSONObject().put("pkg", pkg).put("startMs", now)
             .put("studentId", Prefs.activeStudentId(ctx) ?: JSONObject.NULL)
         if (resumed) s.put("resumed", true)
         prefs(ctx).edit().putString(KEY_SESSION, s.toString()).commit()
+        return now
+    }
+
+    /**
+     * Called [BOUNCE_CHECK_MS] after a launch: if the kiosk is still (or again) in front and that launch's session is still open, the app
+     * never took the screen, so the session is dropped without counting (MainActivity.onResume normally ends it, but only if the kiosk paused).
+     */
+    @Synchronized
+    fun dropIfBounced(ctx: Context, pkg: String, startMs: Long) {
+        if (!MainActivity.inForeground) return
+        val s = openSession(ctx) ?: return
+        if (s.optString("pkg") != pkg || s.optLong("startMs") != startMs) return
+        prefs(ctx).edit().remove(KEY_SESSION).commit()
+        Log.i(TAG, "$pkg: launch bounced, not counted")
     }
 
     /** Ends the open session, if any, and reports status when time was added. */
@@ -60,9 +88,16 @@ object AppUsage {
         val pkg = s.optString("pkg").takeIf { it.isNotBlank() } ?: return
         val start = s.optLong("startMs", 0L)
         val ms = System.currentTimeMillis() - start
-        if (start <= 0 || ms < MIN_MS) return
+        if (start <= 0 || ms < RULES_MIN_MS) return
         val sid = if (s.isNull("studentId")) null else s.optString("studentId")
-        recordSession(ctx, pkg, sid, start, start + minOf(ms, MAX_MS), s.optBoolean("resumed"))
+        val length = minOf(ms, MAX_MS)
+        // Only a launched session can be "short"; a resumed one counts as before (from RULES_MIN_MS, full length).
+        val short = !s.optBoolean("resumed") && ms < MIN_MS
+        recordSession(ctx, pkg, sid, start, start + length, s.optBoolean("resumed"), short)
+        if (short) {
+            Log.i(TAG, "$pkg: ${ms / 1000}s, under ${MIN_MS / 1000}s: counted for the limits only")
+            return
+        }
         if (s.optBoolean("resumed")) {
             DeviceSync.reportStatus(ctx.applicationContext)
             return
@@ -111,8 +146,12 @@ object AppUsage {
         if (pkg != null) start(ctx, pkg)
     }
 
-    /** Stores [startMs, endMs) as one piece per local day; `cont` marks pieces that are not a new open. */
-    private fun recordSession(ctx: Context, pkg: String, sid: String?, startMs: Long, endMs: Long, resumed: Boolean) {
+    /**
+     * Stores [startMs, endMs) as one piece per local day; `cont` marks pieces that are not a new open. [short] = a launched session under
+     * [MIN_MS]: its pieces carry `short` and `creditMs` 0, so the limits count them but the parent's report does not. Every other piece
+     * (and every piece stored by older builds) counts in full.
+     */
+    private fun recordSession(ctx: Context, pkg: String, sid: String?, startMs: Long, endMs: Long, resumed: Boolean, short: Boolean = false) {
         val list = sessions(ctx)
         val zone = ZoneId.systemDefault()
         var from = startMs
@@ -120,7 +159,10 @@ object AppUsage {
             val midnight = Instant.ofEpochMilli(from).atZone(zone).toLocalDate().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
             val to = minOf(endMs, midnight)
             list.put(JSONObject().put("pkg", pkg).put("studentId", sid ?: JSONObject.NULL)
-                .put("startMs", from).put("endMs", to).apply { if (from != startMs || resumed) put("cont", true) })
+                .put("startMs", from).put("endMs", to).apply {
+                    if (from != startMs || resumed) put("cont", true)
+                    if (short) put("short", true).put("creditMs", 0L)
+                })
             from = to
         }
         val oldest = dateKey(Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -(DAYS - 1)) }.timeInMillis)
@@ -141,22 +183,37 @@ object AppUsage {
             .sumOf { maxOf(0L, minOf(toMs, it.optLong("endMs")) - maxOf(fromMs, it.optLong("startMs"))) } / 60_000.0
     }
 
-    /** `{ "yyyy-MM-dd": { "<studentId>"|"parent": { "<package>": {seconds, opens} } } }` for the last [CHILD_DAYS] days. */
-    fun usageByChildMap(ctx: Context): Map<String, Any> {
-        val oldest = dateKey(Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -(CHILD_DAYS - 1)) }.timeInMillis)
-        val ms = TreeMap<String, TreeMap<String, TreeMap<String, LongArray>>>() // [ms, opens]
-        val list = sessions(ctx)
+    /**
+     * `{ "yyyy-MM-dd": { "<studentId>"|"parent": { "<package>": {seconds, opens, lastMs?} } } }` for the last [CHILD_DAYS] days.
+     * seconds = counted time (launched and resumed sessions in full, as before; a launch under [MIN_MS] not at all); lastMs = when the
+     * newest counted use that day ended (epoch ms), left out when nothing counted. A short launch adds no entry (no seconds, no open).
+     */
+    fun usageByChildMap(ctx: Context): Map<String, Any> = usageByChildFrom(sessions(ctx),
+        dateKey(Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -(CHILD_DAYS - 1)) }.timeInMillis)) { dateKey(it) }
+
+    /** [usageByChildMap] over stored pieces (pure: unit-tested). [day] maps a piece's startMs to its local date. */
+    fun usageByChildFrom(list: JSONArray, oldest: String, day: (Long) -> String): Map<String, Any> {
+        val ms = TreeMap<String, TreeMap<String, TreeMap<String, LongArray>>>() // [counted ms, opens, last ms]
         for (i in 0 until list.length()) {
             val s = list.optJSONObject(i) ?: continue
-            val day = dateKey(s.optLong("startMs"))
-            if (day < oldest) continue
+            val d = day(s.optLong("startMs"))
+            if (d < oldest) continue
+            val raw = maxOf(0L, s.optLong("endMs") - s.optLong("startMs"))
+            val credit = if (s.has("creditMs")) s.optLong("creditMs").coerceIn(0L, raw) else raw
+            val open = !s.optBoolean("cont") && !s.optBoolean("short")
+            if (credit <= 0L && !open) continue
             val who = if (s.isNull("studentId")) "parent" else s.optString("studentId", "parent")
-            val e = ms.getOrPut(day) { TreeMap() }.getOrPut(who) { TreeMap() }.getOrPut(s.optString("pkg")) { LongArray(2) }
-            e[0] += s.optLong("endMs") - s.optLong("startMs")
-            if (!s.optBoolean("cont")) e[1]++
+            val e = ms.getOrPut(d) { TreeMap() }.getOrPut(who) { TreeMap() }.getOrPut(s.optString("pkg")) { LongArray(3) }
+            e[0] += credit
+            if (open) e[1]++
+            if (credit > 0L) e[2] = maxOf(e[2], s.optLong("startMs") + credit)
         }
         return ms.mapValues { (_, kids) ->
-            kids.mapValues { (_, apps) -> apps.mapValues { (_, e) -> linkedMapOf("seconds" to e[0] / 1000, "opens" to e[1]) } }
+            kids.mapValues { (_, apps) ->
+                apps.mapValues { (_, e) ->
+                    linkedMapOf<String, Any>("seconds" to e[0] / 1000, "opens" to e[1]).apply { if (e[2] > 0L) put("lastMs", e[2]) }
+                }
+            }
         }
     }
 
