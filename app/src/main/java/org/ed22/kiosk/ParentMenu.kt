@@ -43,19 +43,26 @@ object ParentMenu {
         val timeout = Runnable { if (dialog.isShowing) dialog.dismiss() }
         dialog.setOnShowListener {
             input.requestFocus()
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                when (PinStore.verify(activity, input.text.toString())) {
-                    PinStore.Check.OK -> {
+            val unlock = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            unlock.setOnClickListener {
+                val typed = input.text.toString()
+                // Fail closed: anything but a verified PIN keeps the prompt (and the kiosk) where it is.
+                val check = runCatching { PinStore.verify(activity, typed) }.getOrDefault(PinStore.Check.WRONG)
+                when (pinPromptOutcome(typed, check)) {
+                    PinPromptOutcome.Granted -> {
                         dialog.dismiss()
-                        if (parentMenuGranted(ParentPinResult.Ok)) showMenu(activity)
+                        showMenu(activity)
                     }
-                    PinStore.Check.WRONG -> {
+                    PinPromptOutcome.Empty -> input.error = "Enter the parent PIN"
+                    PinPromptOutcome.Wrong -> {
                         input.text.clear()
                         input.error = "Wrong PIN"
                     }
-                    PinStore.Check.LOCKED -> {
+                    PinPromptOutcome.Locked -> {
+                        input.text.clear()
+                        val secs = (PinStore.lockoutRemainingMs(activity) + 999) / 1000
                         dialog.dismiss()
-                        toast(activity, "Too many wrong PINs. Try again in a minute.")
+                        toast(activity, "Too many wrong PINs. Try again in $secs seconds.")
                     }
                 }
             }
