@@ -26,6 +26,7 @@ object AppUsage {
     private const val TAG = "AppUsage"
     private const val PREFS = "kiosk_usage"
     private const val KEY_SESSION = "session"
+    private const val KEY_PAUSED = "pausedPkg"
     private const val KEY_DAYS = "days"
     private const val KEY_SESSIONS = "sessions"
     private const val CHILD_DAYS = 7
@@ -86,6 +87,16 @@ object AppUsage {
     }
 
     /** The package of the open session, if any. */
+    /** The app that was open when the screen turned off (kept across a process restart), for the "resumed" session. */
+    fun setPausedPkg(ctx: Context, pkg: String) { prefs(ctx).edit().putString(KEY_PAUSED, pkg).commit() }
+
+    fun takePausedPkg(ctx: Context): String? {
+        val p = prefs(ctx)
+        val pkg = p.getString(KEY_PAUSED, null)
+        if (pkg != null) p.edit().remove(KEY_PAUSED).commit()
+        return pkg?.takeIf { it.isNotBlank() }
+    }
+
     fun openPkg(ctx: Context): String? = openSession(ctx)?.optString("pkg")?.takeIf { it.isNotBlank() }
 
     private fun openSession(ctx: Context): JSONObject? =

@@ -180,6 +180,9 @@ class MainActivity : AppCompatActivity() {
     private val permissionQueue = ArrayDeque<Pair<Array<String>, (Map<String, Boolean>) -> Unit>>()
     private var permissionInFlight = false
 
+    /** A file picker or permission prompt the page asked for is in front (the kiosk is waiting on it). */
+    val waitingOnResult get() = fileCallback != null || permissionInFlight
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             val (perms, callback) = permissionQueue.removeFirst()
@@ -214,6 +217,7 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUi()
         current = this
+        ReturnService.start(this)
         DeviceSync.addListener(policyListener)
         DeviceSync.timeListeners += timeListener
         DeviceSync.timeWarnListeners += timeWarnListener
@@ -260,6 +264,7 @@ class MainActivity : AppCompatActivity() {
         AppUsage.end(this)
         if (!::webView.isInitialized) return
         inForeground = true
+        DeviceSync.onKioskInFront()
         handler.removeCallbacks(foreignCheck)
         hideSystemUi()
         // Timers on the offline page may have been throttled while we were in the background.
