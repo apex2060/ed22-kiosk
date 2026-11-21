@@ -14,6 +14,20 @@ import androidx.appcompat.app.AppCompatActivity
 class PinSetupActivity : AppCompatActivity() {
     companion object {
         const val EXTRA_CHANGE = "change"
+
+        /** In front (the kiosk's backstop leaves a parent changing the PIN alone). */
+        var showing = false
+            private set
+    }
+
+    override fun onResume() {
+        super.onResume()
+        showing = true
+    }
+
+    override fun onPause() {
+        showing = false
+        super.onPause()
     }
 
     private val changing get() = intent.getBooleanExtra(EXTRA_CHANGE, false)

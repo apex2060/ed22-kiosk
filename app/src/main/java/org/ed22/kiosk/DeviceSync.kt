@@ -243,7 +243,11 @@ object DeviceSync {
         Log.i(TAG, "Running command ${RemoteCommands.id(cmd)}: ${cmd.optString("type")}")
         when (cmd.optString("type")) {
             "reload" -> activity?.webView?.reload() ?: openKiosk(app)
-            "goHome" -> activity?.goHome() ?: openKiosk(app)
+            // From another app the child must see it: bring the kiosk forward too.
+            "goHome" -> {
+                if (!MainActivity.inForeground && !Prefs.isMaintenance(app)) returnToKiosk(app, "parent's go home")
+                activity?.goHome()
+            }
             "reboot" -> if (!KioskPolicy.reboot(app)) Log.w(TAG, "reboot needs device owner")
             "openApp" -> runCatching { launch(app, cmd.optString("package")) }
                 .onFailure { e -> Log.w(TAG, "openApp ${cmd.optString("package")} failed: ${e.message}") }
@@ -252,7 +256,7 @@ object DeviceSync {
             "openTool" -> if (RemoteCommands.bringToFront("openTool", MainActivity.inForeground) && !Prefs.isMaintenance(app)) {
                 KioskLog.add(app, "openTool", "Brought Little Explorer to the front for ${cmd.optString("title").ifBlank { cmd.optString("toolId") }}" +
                     (AppUsage.openPkg(app)?.let { " (was in $it)" } ?: ""))
-                openKiosk(app)
+                returnToKiosk(app, "open tool")
             }
             "ring" -> onMain { ring(RingDevice.start(app), cmd) }
             "ringStop" -> onMain { RingDevice.stop("ringStop"); ring(null, cmd) }
@@ -289,14 +293,37 @@ object DeviceSync {
             .addOnFailureListener { e -> Log.w(TAG, "status.remote update failed", e) }
     }
 
-    fun openKiosk(ctx: Context) {
+    fun openKiosk(ctx: Context) = openKiosk(ctx, Reclaim.Method.REORDER)
+
+    /** One try at bringing the kiosk activity to the front (see [Reclaim.method]); never throws. */
+    fun openKiosk(ctx: Context, method: Reclaim.Method) {
         try {
-            ctx.startActivity(
-                Intent(ctx, MainActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            )
+            when (method) {
+                Reclaim.Method.REORDER -> ctx.startActivity(
+                    Intent(ctx, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                )
+                Reclaim.Method.MOVE_TASK -> {
+                    val task = ctx.getSystemService(android.app.ActivityManager::class.java).appTasks
+                        .firstOrNull { t -> runCatching { t.taskInfo.baseActivity?.className }.getOrNull() == MainActivity::class.java.name }
+                    if (task != null) task.moveToFront() else openKiosk(ctx, Reclaim.Method.CLEAR_TOP)
+                }
+                Reclaim.Method.CLEAR_TOP -> {
+                    val intent = Intent(ctx, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    val pi = PendingIntent.getActivity(ctx, 7302, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                    if (Build.VERSION.SDK_INT >= 34) {
+                        val opts = android.app.ActivityOptions.makeBasic()
+                            .setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+                        pi.send(ctx, 0, null, null, null, null, opts.toBundle())
+                    } else {
+                        pi.send()
+                    }
+                }
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "Could not open the kiosk", e)
+            Log.w(TAG, "Could not open the kiosk ($method)", e)
+            KioskLog.add(ctx, "returnKiosk", "Opening Little Explorer failed ($method): ${e.javaClass.simpleName}")
         }
     }
 
@@ -316,7 +343,7 @@ object DeviceSync {
 
     /**
      * [Rules] state of every allowedApps entry for the active child, in the tablet's time zone. While the child's device-wide
-     * screen time is up ([timeState]), no app is allowed (why 'deviceTime').
+     * screen time is up ([timeState]), no app is allowed (why 'deviceTime'); while policy.locked, none either (why 'locked').
      */
     fun appStates(ctx: Context, now: Long = System.currentTimeMillis()): Map<String, Rules.State> {
         val sid = Prefs.activeStudentId(ctx)
@@ -324,7 +351,8 @@ object DeviceSync {
         val used = Rules.Used { pkg, who, from, to -> AppUsage.usedMinutes(ctx, pkg, who, from, to) }
         val policy = policy(ctx)
         val strict = policy.optBoolean("strict", false)
-        val states = allowedEntries(policy).mapValues { (_, e) -> Rules.state(e, now, zone, sid, used, strict) }
+        val states = Reclaim.lockedStates(policy.optBoolean("locked", false),
+            allowedEntries(policy).mapValues { (_, e) -> Rules.state(e, now, zone, sid, used, strict) })
         if (!sid.isNullOrEmpty() && !timeState(ctx, now).allowed) return states.mapValues { Rules.State(false, "deviceTime") }
         return states
     }
@@ -431,8 +459,86 @@ object DeviceSync {
         lastAllowed = allowed
         if (gone.isNotEmpty() && !MainActivity.inForeground && !Prefs.isMaintenance(ctx)) {
             Log.i(TAG, "No longer allowed: $gone; returning to the kiosk")
-            openKiosk(ctx)
+            returnToKiosk(ctx, "${gone.joinToString()} no longer allowed")
+        } else {
+            backstop(ctx)
         }
+    }
+
+    // --- getting the child back to the kiosk ---
+
+    private var returnWhy: String? = null
+    private var returnAttempt = 0
+    private var returnSince = 0L
+    private val returnCheck = Runnable { checkReturned() }
+
+    /**
+     * Brings Little Explorer to the front and makes sure it got there: checks after each [Reclaim.retryDelay] and
+     * tries again a stronger way ([Reclaim.method]). Logged (status.log 'returnKiosk') when it took more than one try
+     * or failed. One return at a time; [backstop] starts a new one later if the child is still elsewhere.
+     */
+    fun returnToKiosk(ctx: Context, why: String) {
+        val c = ctx.applicationContext
+        if (Looper.myLooper() != Looper.getMainLooper()) { handler.post { returnToKiosk(c, why) }; return }
+        if (MainActivity.inForeground || Prefs.isMaintenance(c)) return
+        if (returnWhy != null) return
+        returnWhy = why
+        returnAttempt = 0
+        returnSince = android.os.SystemClock.elapsedRealtime()
+        openKiosk(c, Reclaim.Method.REORDER)
+        Reclaim.retryDelay(0)?.let { handler.postDelayed(returnCheck, it) }
+    }
+
+    private fun checkReturned() {
+        val why = returnWhy ?: return
+        if (MainActivity.inForeground || Prefs.isMaintenance(app)) { onKioskInFront(); return }
+        returnAttempt++
+        val delay = Reclaim.retryDelay(returnAttempt)
+        if (delay == null) {
+            val secs = (android.os.SystemClock.elapsedRealtime() - returnSince) / 1000
+            KioskLog.add(app, "returnKiosk", "Could not bring Little Explorer back after $returnAttempt tries in ${secs}s ($why)" +
+                (AppUsage.openPkg(app)?.let { "; $it still open" } ?: ""), important = true)
+            returnWhy = null
+            return
+        }
+        // Lock task drops the tasks of apps that are no longer allowed (when lock task is on).
+        runCatching { KioskPolicy.setLockTaskPackages(app, allowedPackages(app)) }
+        openKiosk(app, Reclaim.method(returnAttempt))
+        handler.postDelayed(returnCheck, delay)
+    }
+
+    /** MainActivity.onResume: a pending return is done. */
+    fun onKioskInFront() {
+        val why = returnWhy ?: return
+        handler.removeCallbacks(returnCheck)
+        returnWhy = null
+        if (returnAttempt > 0) {
+            val secs = (android.os.SystemClock.elapsedRealtime() - returnSince) / 1000
+            KioskLog.add(app, "returnKiosk", "Back in Little Explorer after ${returnAttempt + 1} tries in ${secs}s ($why)")
+        }
+    }
+
+    /**
+     * The backstop (every [Reclaim.TICK_MS] from [ReturnService], and after enforce): while the screen is on and
+     * another app is in front, sends the child back when the device is locked, screen time is up, or the app the
+     * kiosk opened is no longer allowed (its minutes may have run out without the alarm firing).
+     */
+    fun backstop(ctx: Context) {
+        val c = ctx.applicationContext
+        if (MainActivity.inForeground) return
+        val screenOn = runCatching { c.getSystemService(android.os.PowerManager::class.java).isInteractive }.getOrDefault(true)
+        if (!screenOn) return
+        val open = AppUsage.openPkg(c)
+        val why = Reclaim.reason(Reclaim.Check(
+            ownsScreen = CrashGuard.shouldOwnScreen(c),
+            screenOn = screenOn,
+            kioskInFront = MainActivity.inForeground,
+            busyOwnScreen = PinSetupActivity.showing || MainActivity.current?.waitingOnResult == true,
+            coverUp = coverUp(c),
+            openPkg = open,
+            openAllowed = open == null || isAllowed(c, open),
+        )) ?: return
+        returnToKiosk(c, why)
     }
 
     /**

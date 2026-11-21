@@ -201,7 +201,7 @@ object KioskWatchdog {
                 val why = if (!w.activityAlive) "kiosk was not running" else "kiosk was not in front and lock task was off (likely the home screen)"
                 KioskLog.add(app, "leftKiosk", "Watchdog reopened Little Explorer: $why", important = true)
                 KioskLog.exit(app, "left the kiosk: $why")
-                DeviceSync.openKiosk(app)
+                DeviceSync.returnToKiosk(app, why)
             }
         }
     }
