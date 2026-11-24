@@ -255,7 +255,11 @@ object ParentMenu {
         val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
         val other = activity.packageManager
             .queryIntentActivities(home, PackageManager.MATCH_DEFAULT_ONLY)
-            .firstOrNull { it.activityInfo.packageName != activity.packageName }
+            .filter { it.activityInfo.packageName != activity.packageName }
+            // Skip Settings' FallbackHome (priority -1000, only for the locked-at-boot state): it closes at once,
+            // which put the tablet straight back in Little Explorer.
+            .filter { it.priority >= 0 }
+            .maxByOrNull { it.priority }
             ?: return null
         return home.setClassName(other.activityInfo.packageName, other.activityInfo.name)
     }

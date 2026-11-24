@@ -205,7 +205,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         // A parent's pause from the PIN menu survives Android re-homing (see ParentPause); only a real return ends it.
-        if (handlePause(intent, resumeOnly = false).first == ParentPause.Entry.END) KioskPolicy.apply(this)
+        // A rebuild (renderer recovery, low memory) re-delivers the old intent: that is not the parent coming back.
+        if (savedInstanceState != null && Prefs.isMaintenance(this)) pauseDecided = true
+        else if (handlePause(intent, resumeOnly = false).first == ParentPause.Entry.END) KioskPolicy.apply(this)
 
         root = FrameLayout(this)
         webView = WebView(this)

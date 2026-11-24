@@ -21,7 +21,7 @@ object ParentPause {
     const val SETTINGS_MAX_MS = 15 * 60_000L
 
     /** A Home relaunch this soon after the pause started is Android re-homing, not the parent coming back. */
-    const val REHOME_GRACE_MS = 5_000L
+    const val REHOME_GRACE_MS = 10_000L
 
     data class State(val kind: Kind, val at: Long)
 

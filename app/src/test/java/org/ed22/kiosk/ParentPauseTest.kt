@@ -48,6 +48,7 @@ class ParentPauseTest {
         // Back from Settings (resume), Home, the icon, or the accessibility service bringing Little Explorer back.
         assertEquals(Entry.END, entry(settings, 20_000, resume = true))
         assertEquals(Entry.END, entry(settings, 20_000, home = true))
+        assertEquals(Entry.STEP_ASIDE, entry(settings, 9_000, home = true))
         assertEquals(Entry.END, entry(settings, 20_000, launcher = true))
         assertEquals(Entry.END, entry(settings, 20_000))
         // Expired: the next entry locks again.
