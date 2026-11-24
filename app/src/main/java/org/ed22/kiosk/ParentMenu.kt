@@ -78,9 +78,9 @@ object ParentMenu {
         val time = if (DeviceTime.limited(DeviceSync.policy(activity).optJSONObject("deviceTime"), sid)) DeviceSync.timeState(activity) else null
         val items = listOfNotNull<Pair<String, () -> Unit>>(
             time?.let { (if (it.allowed) "Screen time: 30 more minutes" else "Screen time is up: give 30 more minutes") to { giveMoreTime(activity) } },
-            "Exit kiosk mode" to { exit(activity, null) },
+            "Exit kiosk mode" to { exit(activity, null, ParentPause.Kind.EXIT) },
             "Wi-Fi" to { LockWifiDialog.showParentControls(activity) },
-            "Open Wi-Fi settings" to { exit(activity, Intent(Settings.ACTION_WIFI_SETTINGS)) },
+            "Open Wi-Fi settings" to { exit(activity, Intent(Settings.ACTION_WIFI_SETTINGS), ParentPause.Kind.SETTINGS) },
             // Remote screenshots of other apps (Android 11+): one-time Accessibility switch.
             (android.os.Build.VERSION.SDK_INT >= ScreenshotPlan.FULL_SCREEN_SDK).takeIf { it }?.let {
                 (if (ShotService.ready) "Screenshots: full screen is on" else "Screenshots: turn on full screen") to { showScreenshots(activity) }
@@ -125,7 +125,8 @@ object ParentMenu {
         if (!on) {
             builder.setPositiveButton("Open Accessibility settings") { _, _ -> openAccessibility(activity) }
             builder.setNeutralButton("App info") { _, _ ->
-                exit(activity, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${activity.packageName}")))
+                exit(activity, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${activity.packageName}")),
+                    ParentPause.Kind.SETTINGS)
             }
         }
         builder.create().present(activity)
@@ -145,7 +146,7 @@ object ParentMenu {
             else Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
         ShotService.setReturnAfterSetup(activity, true)
         KioskLog.add(activity, "screenshot", "Parent PIN: opened Accessibility settings for full-screen screenshots")
-        exit(activity, intent)
+        exit(activity, intent, ParentPause.Kind.SETTINGS)
     }
 
     /** Clears a phone PIN/pattern/password set behind the kiosk (only possible once the reset token is active). */
@@ -214,10 +215,26 @@ object ParentMenu {
             .present(activity)
     }
 
-    private fun exit(activity: MainActivity, then: Intent?) {
-        KioskPolicy.release(activity)
-        leave(activity, then)
-        toast(activity, "Kiosk paused. Open Little Explorer or restart the device to lock it again.")
+    /**
+     * Pauses the kiosk ([ParentPause]) and opens [then] (Exit: the device's other home app) on top. The kiosk activity is
+     * NOT finished: removing the kiosk's Home task made Android relaunch Home = Little Explorer at once, and that
+     * relaunch ended the pause (the bounce back, build 154 and earlier).
+     */
+    private fun exit(activity: MainActivity, then: Intent?, kind: ParentPause.Kind) {
+        KioskPolicy.release(activity, kind)
+        KioskLog.add(activity, "parentPause", "Parent PIN: ${if (kind == ParentPause.Kind.EXIT) "exit kiosk mode" else "settings"} pause" +
+            (then?.action?.let { " ($it)" } ?: ""))
+        val next = then ?: systemLauncher(activity)
+        val opened = next != null && runCatching { activity.startActivity(next.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
+        if (!opened && kind == ParentPause.Kind.SETTINGS) {
+            // Nothing opened: don't leave the kiosk unlocked.
+            Prefs.endPause(activity)
+            KioskPolicy.apply(activity)
+            KioskPolicy.startLockTask(activity)
+            toast(activity, "Could not open Settings.")
+            return
+        }
+        toast(activity, ParentPause.toast(kind))
     }
 
     /** Closes the kiosk and opens [then], or the device's normal home screen. */
@@ -233,7 +250,8 @@ object ParentMenu {
         }
     }
 
-    private fun systemLauncher(activity: MainActivity): Intent? {
+    /** The device's other home app (not Little Explorer), or null. */
+    fun systemLauncher(activity: android.app.Activity): Intent? {
         val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
         val other = activity.packageManager
             .queryIntentActivities(home, PackageManager.MATCH_DEFAULT_ONLY)

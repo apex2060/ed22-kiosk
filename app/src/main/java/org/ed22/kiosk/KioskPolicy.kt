@@ -129,8 +129,8 @@ object KioskPolicy {
     }
 
     /** Lets a parent out: stops lock task and undoes the lockdown until the kiosk is reopened or the device reboots. */
-    fun release(activity: Activity) {
-        Prefs.setMaintenance(activity, true)
+    fun release(activity: Activity, kind: ParentPause.Kind = ParentPause.Kind.EXIT) {
+        Prefs.startPause(activity, kind)
         if (isLockTaskActive(activity)) safely("stop lock task") { activity.stopLockTask() }
         if (!isDeviceOwner(activity)) return
         val dpm = dpm(activity)
