@@ -64,6 +64,39 @@
             android:layout_marginTop="24dp"
             android:text="Save PIN" />
 
+        <!-- First-run step (Android 11+): full-screen screenshots. Shown in place of the PIN fields. -->
+        <LinearLayout
+            android:id="@+id/shot_step"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/shot_restricted"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="If the switch is greyed out (Restricted setting): open Settings › Apps › Little Explorer (App info), tap ⋮ › Allow restricted settings, then turn it on."
+                android:textAppearance="?android:attr/textAppearanceSmall"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/shot_on"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Turn on" />
+
+            <Button
+                android:id="@+id/shot_skip"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Skip for now" />
+        </LinearLayout>
+
         <TextView
             android:id="@+id/owner_warning"
             android:layout_width="match_parent"

@@ -25,13 +25,6 @@ object KioskConfig {
 
     val BRIDGE_ORIGIN_RULES = setOf("https://$TRUSTED_DOMAIN", "https://*.$TRUSTED_DOMAIN")
 
-    /**
-     * Remote screenshots: unsigned Cloudinary upload with the same public preset the web uses for proof photos.
-     * Both are public names (an unsigned preset has no secret); nothing secret is in the app.
-     */
-    const val CLOUDINARY_CLOUD = "homeschoolexpress"
-    const val CLOUDINARY_PRESET = "userDocs"
-
     /** The parent menu opens after this many taps in the bottom-left corner. */
     const val CORNER_TAPS = 4
     const val CORNER_TAP_WINDOW_MS = 3000L

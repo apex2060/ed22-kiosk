@@ -7,7 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** policy.command screenshot: RemoteCommands.decide, features, ScreenshotPlan (scope, size, upload form, status shape). */
+/** policy.command screenshot: RemoteCommands.decide, features, ScreenshotPlan (scope, size steps, subdoc and status shape). */
 class ScreenshotTest {
     private val now = 1_793_000_000_000L
     private val kiosk = "org.ed22.kiosk"
@@ -102,43 +102,101 @@ class ScreenshotTest {
     }
 
     @Test
-    fun uploadFormAndUrl() {
-        assertEquals("https://api.cloudinary.com/v1_1/homeschoolexpress/image/upload", ScreenshotPlan.uploadUrl(KioskConfig.CLOUDINARY_CLOUD))
-        assertEquals("userDocs", KioskConfig.CLOUDINARY_PRESET)
-        val f = ScreenshotPlan.formFields("userDocs", "uid1", "exp_uid1_dev1").toMap()
-        assertEquals("userDocs", f["upload_preset"])
-        assertEquals("user/uid1/explorerScreens/exp_uid1_dev1", f["folder"])
-        assertEquals("explorerScreenshot,exp_uid1_dev1", f["tags"])
-        val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2, 0xFF.toByte(), 0xD9.toByte())
-        val body = ScreenshotPlan.multipart("B", ScreenshotPlan.formFields("userDocs", "u", "d"), "s.jpg", jpeg)
-        val text = String(body, Charsets.ISO_8859_1)
-        assertTrue(text.startsWith("--B\r\nContent-Disposition: form-data; name=\"upload_preset\"\r\n\r\nuserDocs\r\n"))
-        assertTrue(text.contains("name=\"folder\"\r\n\r\nuser/u/explorerScreens/d\r\n"))
-        assertTrue(text.contains("name=\"file\"; filename=\"s.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n"))
-        assertTrue(text.endsWith("\r\n--B--\r\n"))
-        val start = text.indexOf("image/jpeg\r\n\r\n") + "image/jpeg\r\n\r\n".length
-        assertTrue(body.copyOfRange(start, start + jpeg.size).contentEquals(jpeg))
-        assertFalse(text.contains("api_key") || text.contains("signature"))
+    fun theDataUrlFitsTheFirestoreDoc() {
+        assertEquals(700_000, ScreenshotPlan.MAX_DATA_CHARS)
+        val jpeg = ByteArray(1000) { (it * 7).toByte() }
+        val data = ScreenshotPlan.dataUrl(jpeg)
+        assertTrue(data.startsWith("data:image/jpeg;base64,"))
+        assertEquals(ScreenshotPlan.dataLength(jpeg.size), data.length)
+        assertTrue(java.util.Base64.getDecoder().decode(data.removePrefix(ScreenshotPlan.DATA_PREFIX)).contentEquals(jpeg))
+        for (n in listOf(0, 1, 2, 3, 4, 524_000, 524_270)) assertEquals(ScreenshotPlan.dataUrl(ByteArray(n)).length, ScreenshotPlan.dataLength(n))
+        // About 512 KB of JPEG is the most that fits.
+        val maxBytes = (0..700_000).last { ScreenshotPlan.fits(it) }
+        assertTrue(maxBytes in 520_000..530_000)
+        assertTrue(ScreenshotPlan.dataLength(maxBytes) <= 700_000)
+        assertFalse(ScreenshotPlan.fits(maxBytes + 3))
     }
 
     @Test
-    fun secureUrlParsing() {
-        assertEquals("https://res.cloudinary.com/x/a.jpg",
-            ScreenshotPlan.secureUrl("""{"secure_url":"https://res.cloudinary.com/x/a.jpg","url":"http://res.cloudinary.com/x/a.jpg"}"""))
-        assertNull(ScreenshotPlan.secureUrl("""{"error":{"message":"bad"}}"""))
-        assertNull(ScreenshotPlan.secureUrl("not json"))
-        assertNull(ScreenshotPlan.secureUrl(null))
-        assertNull(ScreenshotPlan.secureUrl("""{"secure_url":"http://insecure"}"""))
+    fun stepsDownQualityThenSizeUntilItFits() {
+        assertEquals(listOf(1280 to 70, 1280 to 60, 1280 to 50, 1280 to 40, 1024 to 50, 800 to 50, 640 to 50),
+            ScreenshotPlan.STEPS.map { it.maxSide to it.quality })
+        // A typical screen fits at the first step.
+        val tried = mutableListOf<ScreenshotPlan.Step>()
+        val first = ScreenshotPlan.firstFit({ tried += it; 240_000 }, { it })!!
+        assertEquals(ScreenshotPlan.Step(1280, 70), first.first); assertEquals(1, tried.size)
+        // A busy, oversized screen (simulated sizes): steps down until it fits at 1024 px.
+        val sizes = mapOf(ScreenshotPlan.Step(1280, 70) to 900_000, ScreenshotPlan.Step(1280, 60) to 780_000,
+            ScreenshotPlan.Step(1280, 50) to 690_000, ScreenshotPlan.Step(1280, 40) to 600_000, ScreenshotPlan.Step(1024, 50) to 450_000)
+        tried.clear()
+        val fit = ScreenshotPlan.firstFit({ tried += it; sizes.getValue(it) }, { it })!!
+        assertEquals(ScreenshotPlan.Step(1024, 50), fit.first); assertEquals(450_000, fit.second); assertEquals(5, tried.size)
+        // Still too large at 640 px: fail ("The screenshot is too large").
+        tried.clear()
+        assertNull(ScreenshotPlan.firstFit({ tried += it; 2_000_000 }, { it }))
+        assertEquals(ScreenshotPlan.STEPS, tried)
+        assertEquals("The screenshot is too large", ScreenshotPlan.WHY_TOO_LARGE)
+        assertEquals(640 to 360, ScreenshotPlan.scaled(1920, 1080, 640))
+    }
+
+    @Test
+    fun subdocShapeOneDocPerDevice() {
+        val jpeg = ByteArray(300) { 1 }
+        val data = ScreenshotPlan.dataUrl(jpeg)
+        val ts = Any()
+        val d = ScreenshotPlan.subdoc("cmd1", 5L, 576, 1280, "screen", yt, "stu1", jpeg, data, ts)
+        assertEquals(setOf("id", "at", "w", "h", "scope", "app", "studentId", "mime", "bytes", "data", "updatedOn"), d.keys)
+        assertEquals("cmd1", d["id"]); assertEquals("image/jpeg", d["mime"]); assertEquals(300, d["bytes"])
+        assertEquals(data, d["data"]); assertTrue(d["updatedOn"] === ts)
+        assertEquals(mapOf("package" to yt.pkg, "label" to "YouTube Kids"), d["app"])
+        assertFalse(d.keys.any { it == "child" + "Id" })
+        val parent = ScreenshotPlan.subdoc("c", 1L, 1, 1, "app", null, " ", jpeg, data, ts)
+        assertNull(parent["studentId"]); assertNull(parent["app"])
+        // Every capture set()s the same doc, so only the latest exists.
+        assertEquals("items", ScreenshotPlan.ITEMS); assertEquals("screenshot", ScreenshotPlan.SUBDOC_ID)
+        assertEquals("items/screenshot", ScreenshotPlan.DOC_REF)
+        assertEquals(30_000L, ScreenshotPlan.WRITE_TIMEOUT_MS)
+        assertEquals("The tablet is offline", ScreenshotPlan.WHY_OFFLINE)
+        assertEquals("Could not send the screenshot", ScreenshotPlan.WHY_SEND)
+        assertEquals("Could not send the screenshot (slow network)", ScreenshotPlan.WHY_SLOW)
+    }
+
+    @Test
+    fun setupStepOnlyOnAndroid11PlusFirstRunAndWhenOff() {
+        assertTrue(ScreenshotPlan.offerSetupStep(30, changingPin = false, alreadyOn = false))
+        assertTrue(ScreenshotPlan.offerSetupStep(34, changingPin = false, alreadyOn = false))
+        assertFalse(ScreenshotPlan.offerSetupStep(29, changingPin = false, alreadyOn = false)) // Android 8-10
+        assertFalse(ScreenshotPlan.offerSetupStep(26, changingPin = false, alreadyOn = false))
+        assertFalse(ScreenshotPlan.offerSetupStep(34, changingPin = true, alreadyOn = false))  // changing the PIN
+        assertFalse(ScreenshotPlan.offerSetupStep(34, changingPin = false, alreadyOn = true))  // on already / adb grant
+        // The watchdog doesn't open the kiosk over the step (the PIN is already set, MainActivity not started yet).
+        val w = Recovery.Watch(maintenance = false, deviceOwner = true, hasPin = true, screenOn = true, activityAlive = false,
+            inForeground = false, lockTaskActive = true, appOpen = false, pinSetupInFront = true)
+        assertEquals(Recovery.WatchAction.NONE, Recovery.watch(w, 0))
+        assertEquals(Recovery.WatchAction.RELAUNCH, Recovery.watch(w.copy(pinSetupInFront = false), 0))
+        assertEquals("Screenshots of the whole screen", PinSetupActivity.SHOT_TITLE)
+        assertEquals("Lets you see this tablet's screen from the device manager, including other apps. " +
+            "Tap Turn on, then turn on Little Explorer and tap Allow.", PinSetupActivity.SHOT_BODY)
+    }
+
+    @Test
+    fun noCloudinaryLeftInTheApp() {
+        val src = java.io.File("src/main").walkTopDown().filter { it.isFile }.toList()
+        assertTrue(src.size > 20)
+        val hits = src.filter { it.readText().contains("cloudinary", ignoreCase = true) }.map { it.name }
+        assertEquals(emptyList<String>(), hits)
     }
 
     @Test
     fun statusShapeStudentIdOnly() {
-        val s = ScreenshotPlan.status("123", "https://u", 5L, 800, 1280, "screen", yt, "stu1")
-        assertEquals(setOf("id", "url", "at", "w", "h", "scope", "app", "studentId"), s.keys)
+        val s = ScreenshotPlan.status("123", 5L, 800, 1280, "screen", yt, "stu1")
+        // No url: /me reads the picture from the items/screenshot subdoc.
+        assertEquals(setOf("id", "at", "w", "h", "scope", "app", "studentId", "doc"), s.keys)
+        assertEquals("items/screenshot", s["doc"])
         assertEquals("123", s["id"]); assertEquals(800, s["w"]); assertEquals("screen", s["scope"])
         assertEquals(mapOf("package" to yt.pkg, "label" to "YouTube Kids"), s["app"])
         assertEquals("stu1", s["studentId"])
-        val parent = ScreenshotPlan.status("1", "https://u", 5L, 1, 1, "app", null, "")
+        val parent = ScreenshotPlan.status("1", 5L, 1, 1, "app", null, "")
         assertNull(parent["studentId"]); assertNull(parent["app"])
         assertFalse(s.keys.any { it == "child" + "Id" })
         val r = RingPlan.remote("123", false, "The screen is off", 9L)
@@ -147,7 +205,8 @@ class ScreenshotTest {
 
     @Test
     fun logLines() {
-        assertEquals("Screenshot for the parent (screen)", ScreenshotPlan.logLine("screen", ""))
-        assertEquals("Screenshot failed: Upload failed", ScreenshotPlan.logLine(null, "Upload failed"))
+        assertEquals("Screenshot for the parent (screen, 240 KB)", ScreenshotPlan.logLine("screen", "", 245_760))
+        assertEquals("Screenshot for the parent (app, 1 KB)", ScreenshotPlan.logLine("app", "", 700))
+        assertEquals("Screenshot failed: The tablet is offline", ScreenshotPlan.logLine(null, "The tablet is offline"))
     }
 }
