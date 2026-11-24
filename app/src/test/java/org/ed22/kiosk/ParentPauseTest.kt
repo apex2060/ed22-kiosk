@@ -23,7 +23,9 @@ class ParentPauseTest {
         assertEquals(Entry.STEP_ASIDE, entry(settings, 1_000, home = true))
         assertEquals(Entry.FORWARD_HOME, entry(exit, 1_000, home = true))
         assertEquals(Entry.KEEP, entry(exit, 1_000, home = true, other = false))
-        assertEquals(Entry.KEEP, entry(settings, 800)) // explicit start / resume within the grace
+        // A quick return from Settings (Back, the screenshot service's explicit start) is the parent coming back.
+        assertEquals(Entry.END, entry(settings, 800))
+        assertEquals(Entry.END, entry(settings, 3_000, resume = true))
         assertEquals(Entry.KEEP, entry(exit, 800, resume = true))
     }
 

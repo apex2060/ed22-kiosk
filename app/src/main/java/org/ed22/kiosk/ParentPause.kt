@@ -60,9 +60,9 @@ object ParentPause {
                 young -> Entry.KEEP  // our own exit just happened
                 else -> Entry.END    // opened on purpose later (recents, a link): re-entered
             }
-            Kind.SETTINGS -> if (young) {
-                if (isHome) Entry.STEP_ASIDE else Entry.KEEP
-            } else Entry.END
+            // Only a Home relaunch is Android re-homing. Back, the icon, or the accessibility service bringing Little
+            // Explorer back (an explicit start) is the parent returning, however soon: lock again.
+            Kind.SETTINGS -> if (young && isHome) Entry.STEP_ASIDE else Entry.END
         }
     }
 
