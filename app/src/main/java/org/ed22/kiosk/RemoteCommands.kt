@@ -23,13 +23,21 @@ object RemoteCommands {
         // status.appUsageByChild entries carry lastMs (when the app was last used that day); launches under 15 s are left out of
         // the report (still counted for limits) (AppUsage).
         "usageLastUsed",
+        // policy.command screenshot -> status.screenshot {id, url, at, w, h, scope, app, studentId} (at least Little Explorer's own window).
+        "screenshot",
     )
 
-    /** Commands with an epoch-ms id that are only run while fresh and while the device is not locked. */
-    val TIMED_TYPES = setOf("openApp", "openTool", "ring", "ringStop")
+    /** Listed only while the accessibility service can capture the whole screen (Android 11+, enabled and connected). */
+    const val FULL_SCREEN_FEATURE = "screenshotFull"
 
-    /** Timed commands that also run while the device is locked (a lost device must ring). */
-    val RING_TYPES = setOf("ring", "ringStop")
+    /** `status.features` at report time. */
+    fun features(fullScreen: Boolean): List<String> = FEATURES + listOfNotNull(FULL_SCREEN_FEATURE.takeIf { fullScreen })
+
+    /** Commands with an epoch-ms id that are only run while fresh and while the device is not locked. */
+    val TIMED_TYPES = setOf("openApp", "openTool", "ring", "ringStop", "screenshot")
+
+    /** Timed commands that also run while the device is locked (a lost device must ring; the parent may want to see the lock screen). */
+    val RING_TYPES = setOf("ring", "ringStop", "screenshot")
 
     /** [run] = do it; [handled] = remember the id so it never runs again; [reason] for the log when not run. */
     data class Decision(val run: Boolean, val handled: Boolean, val reason: String)

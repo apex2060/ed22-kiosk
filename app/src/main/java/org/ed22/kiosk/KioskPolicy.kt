@@ -97,7 +97,20 @@ object KioskPolicy {
             safely("auto time") { dpm.setAutoTimeRequired(admin, true) }
         }
         AUTO_GRANT.forEach { grantPermission(ctx, it) }
+        safely("accessibility allowlist") { allowShotService(ctx) }
         safely("screen lock token") { ScreenLock.ensureToken(ctx) }
+    }
+
+    /**
+     * Remote screenshots: makes sure our accessibility service (ShotService) is permitted. A device owner can only allowlist it;
+     * a parent still turns it on in Settings. null (the default) already permits every service, so it is left alone
+     * (setting a list would block other non-system services such as a screen reader).
+     */
+    fun allowShotService(ctx: Context) {
+        if (!isDeviceOwner(ctx)) return
+        val dpm = dpm(ctx)
+        val cur = dpm.getPermittedAccessibilityServices(admin(ctx)) ?: return
+        if (ctx.packageName !in cur) dpm.setPermittedAccessibilityServices(admin(ctx), cur + ctx.packageName)
     }
 
     /** Lock task allowlist: this app, [LOCK_TASK_EXTRAS] and the apps the device doc currently allows. */

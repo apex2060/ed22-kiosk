@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Little Explorer</string>
+    <string name="shot_service_description">Lets a parent see this tablet\'s screen from the device manager (Take screenshot). Little Explorer only takes a screenshot when a parent asks for one. It does not read or change what is on the screen.</string>
 </resources>

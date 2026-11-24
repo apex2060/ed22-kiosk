@@ -81,6 +81,10 @@ object ParentMenu {
             "Exit kiosk mode" to { exit(activity, null) },
             "Wi-Fi" to { LockWifiDialog.showParentControls(activity) },
             "Open Wi-Fi settings" to { exit(activity, Intent(Settings.ACTION_WIFI_SETTINGS)) },
+            // Remote screenshots of other apps (Android 11+): one-time Accessibility switch.
+            (android.os.Build.VERSION.SDK_INT >= ScreenshotPlan.FULL_SCREEN_SDK).takeIf { it }?.let {
+                (if (ShotService.ready) "Screenshots: full screen is on" else "Screenshots: turn on full screen") to { showScreenshots(activity) }
+            },
             "Reload start page" to { activity.goHome() },
             "Change PIN" to {
                 activity.startActivity(Intent(activity, PinSetupActivity::class.java).putExtra(PinSetupActivity.EXTRA_CHANGE, true))
@@ -96,6 +100,52 @@ object ParentMenu {
             .setNegativeButton("Close", null)
             .create()
             .present(activity)
+    }
+
+    /**
+     * Full-screen remote screenshots: Android Settings › Accessibility › Little Explorer. A device owner can only allowlist the
+     * service (KioskPolicy.allowShotService), so the parent turns it on there; the kiosk comes back when it connects.
+     */
+    private fun showScreenshots(activity: MainActivity) {
+        val on = ShotService.ready
+        val msg = if (on) {
+            "Take screenshot in the device manager shows the whole screen, including other apps.\n\n" +
+                "To turn it off: Android Settings › Accessibility › Little Explorer."
+        } else {
+            "Take screenshot in the device manager now shows only Little Explorer. To see other apps too:\n\n" +
+                "1. Tap Open Accessibility settings.\n" +
+                "2. Tap Little Explorer (it may be under Downloaded or Installed apps) and turn it on, then Allow.\n" +
+                "3. Little Explorer comes back by itself.\n\n" +
+                "If the switch is greyed out (\"Restricted setting\"), tap App info instead, then ⋮ › Allow restricted settings, and come back here."
+        }
+        val builder = AlertDialog.Builder(activity)
+            .setTitle("Screenshots")
+            .setMessage(msg)
+            .setNegativeButton("Close", null)
+        if (!on) {
+            builder.setPositiveButton("Open Accessibility settings") { _, _ -> openAccessibility(activity) }
+            builder.setNeutralButton("App info") { _, _ ->
+                exit(activity, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${activity.packageName}")))
+            }
+        }
+        builder.create().present(activity)
+    }
+
+    private fun openAccessibility(activity: MainActivity) {
+        runCatching { KioskPolicy.allowShotService(activity) }
+        // adb-granted WRITE_SECURE_SETTINGS (optional): no Settings screen needed.
+        if (ShotService.enableSilently(activity)) {
+            KioskLog.add(activity, "screenshot", "Parent PIN: full-screen screenshots turned on")
+            toast(activity, "Full-screen screenshots are on.")
+            return
+        }
+        val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+            .putExtra(Intent.EXTRA_COMPONENT_NAME, ShotService.component(activity))
+        val intent = if (android.os.Build.VERSION.SDK_INT >= 31 && details.resolveActivity(activity.packageManager) != null) details
+            else Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+        ShotService.setReturnAfterSetup(activity, true)
+        KioskLog.add(activity, "screenshot", "Parent PIN: opened Accessibility settings for full-screen screenshots")
+        exit(activity, intent)
     }
 
     /** Clears a phone PIN/pattern/password set behind the kiosk (only possible once the reset token is active). */
