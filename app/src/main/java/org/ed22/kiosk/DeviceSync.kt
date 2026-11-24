@@ -266,6 +266,8 @@ object DeviceSync {
                 reportRemote(cmd, r.ok, r.why)
                 reportStatus(app)
             }
+            // Remote screenshot (also while locked): status.screenshot (latest only) + status.remote; silent on the tablet.
+            "screenshot" -> onMain { screenshot(cmd) }
             else -> Log.w(TAG, "Unknown command type: ${cmd.optString("type")}")
         }
     }
@@ -282,6 +284,24 @@ object DeviceSync {
         if (auth.currentUser == null) return
         doc(docId).update("status.remote", RingPlan.remote(id, why == null, why ?: "", System.currentTimeMillis()))
             .addOnFailureListener { e -> Log.w(TAG, "status.remote update failed", e) }
+    }
+
+    /** policy.command screenshot: capture + upload off the main thread, then one update of status.screenshot / status.remote. */
+    private fun screenshot(cmd: JSONObject) {
+        val id = RemoteCommands.id(cmd) ?: return
+        val uid = uid()
+        val docId = deviceDocId(app)
+        if (uid == null || docId == null) { Log.w(TAG, "screenshot: not signed in"); return }
+        val studentId = Prefs.activeStudentId(app)
+        Screenshot.take(app, uid, docId) { r ->
+            KioskLog.add(app, "screenshot", ScreenshotPlan.logLine(r.scope.takeIf { r.ok }, r.why))
+            if (auth.currentUser == null) return@take
+            val now = System.currentTimeMillis()
+            val fields = HashMap<String, Any?>()
+            if (r.ok) fields["status.screenshot"] = ScreenshotPlan.status(id, r.url, r.at, r.w, r.h, r.scope, r.app, studentId)
+            fields["status.remote"] = RingPlan.remote(id, r.ok, r.why, now)
+            doc(docId).update(fields).addOnFailureListener { e -> Log.w(TAG, "status.screenshot update failed", e) }
+        }
     }
 
     /** status.remote {id, ok, why, at} for a command other than ring. */
@@ -704,7 +724,8 @@ object DeviceSync {
             "deviceOwner" to KioskPolicy.isDeviceOwner(ctx),
             "policyNote" to enforcementNote,
             "timeZone" to ZoneId.systemDefault().id,
-            "features" to RemoteCommands.FEATURES,
+            // 'screenshotFull' only while the accessibility service is connected (ShotService reports again when that changes).
+            "features" to RemoteCommands.features(ShotService.ready),
             "screenLock" to ScreenLock.status(ctx),
             "policyRev" to policyRev(ctx),
             "policySource" to policySource(ctx),
