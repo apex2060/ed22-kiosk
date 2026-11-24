@@ -10,32 +10,30 @@ import android.os.PowerManager
 import android.util.Log
 import android.view.PixelCopy
 import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * policy.command screenshot: capture (whole screen via [ShotService], else Little Explorer's own window), JPEG in memory,
- * unsigned Cloudinary upload. Silent: no toast, sound, flash or notification. Nothing is written to disk or the gallery.
+ * policy.command screenshot: capture (whole screen via [ShotService], else Little Explorer's own window) and a JPEG data
+ * URL in memory; [DeviceSync] writes it to the device's items/screenshot doc in Firestore. Silent: no toast, sound, flash
+ * or notification. Nothing goes to files or the gallery (only Firestore's own app-private cache, like every synced doc).
  * Work runs on a background thread; only the window pixel copy uses the main thread.
  */
 object Screenshot {
     private const val TAG = "Screenshot"
     private const val CAPTURE_TIMEOUT_MS = 15_000L
 
-    /** Success: [url]..[app] for status.screenshot. Failure: [why] for status.remote. */
-    data class Result(
-        val ok: Boolean, val why: String = "", val url: String = "", val at: Long = 0, val w: Int = 0, val h: Int = 0,
-        val scope: String = "", val app: ScreenshotPlan.AppRef? = null,
+    /** Success: [at]..[data] for the subdoc and status.screenshot. Failure: [why] for status.remote. */
+    class Result(
+        val ok: Boolean, val why: String = "", val at: Long = 0, val w: Int = 0, val h: Int = 0,
+        val scope: String = "", val app: ScreenshotPlan.AppRef? = null, val jpeg: ByteArray = ByteArray(0), val data: String = "",
     )
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "kiosk-screenshot").apply { isDaemon = true } }
     private val main = Handler(Looper.getMainLooper())
 
     /** Call on the main thread. [done] is called once, on the main thread. */
-    fun take(ctx: Context, uid: String, deviceDocId: String, done: (Result) -> Unit) {
+    fun take(ctx: Context, done: (Result) -> Unit) {
         val app = ctx.applicationContext
         val once = AtomicBoolean(false)
         val finish: (Result) -> Unit = { r -> if (once.compareAndSet(false, true)) main.post { done(r) } }
@@ -43,7 +41,7 @@ object Screenshot {
         val plan = ScreenshotPlan.plan(Build.VERSION.SDK_INT, ShotService.ready, interactive, MainActivity.inForeground,
             frontApp(app), app.packageName)
         if (!plan.ok) return finish(Result(false, plan.why))
-        // The timeout covers the capture only (not the upload, which has its own HTTP timeouts).
+        // The timeout covers the capture only (the Firestore write has its own, in DeviceSync).
         val captureDone = AtomicBoolean(false)
         val timeout = Runnable { if (captureDone.compareAndSet(false, true)) finish(Result(false, "Screenshot timed out")) }
         main.postDelayed(timeout, CAPTURE_TIMEOUT_MS)
@@ -52,7 +50,7 @@ object Screenshot {
             if (!captureDone.compareAndSet(false, true)) { bmp?.recycle(); return@captured }
             main.removeCallbacks(timeout)
             if (bmp == null) finish(Result(false, err ?: "Screenshot failed"))
-            else worker.execute { finish(encodeAndUpload(bmp, at, scope, plan.app, uid, deviceDocId)) }
+            else worker.execute { finish(encode(bmp, at, scope, plan.app)) }
         }
         if (plan.scope == ScreenshotPlan.SCOPE_SCREEN && Build.VERSION.SDK_INT >= ScreenshotPlan.FULL_SCREEN_SDK) {
             val started = ShotService.capture(worker) { bmp, err ->
@@ -103,54 +101,29 @@ object Screenshot {
         }
     }
 
-    /** Background thread: scale, JPEG in memory, upload. */
-    private fun encodeAndUpload(bmp: Bitmap, at: Long, scope: String, app: ScreenshotPlan.AppRef?, uid: String, deviceDocId: String): Result {
-        val (w, h) = ScreenshotPlan.scaled(bmp.width, bmp.height)
-        val jpeg = try {
-            val scaled = if (w == bmp.width && h == bmp.height) bmp else Bitmap.createScaledBitmap(bmp, w, h, true)
-            val out = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, ScreenshotPlan.JPEG_QUALITY, out)
-            if (scaled !== bmp) scaled.recycle()
-            out.toByteArray()
+    /** Background thread: JPEG in memory, stepping quality and size down ([ScreenshotPlan.STEPS]) until the data URL fits. */
+    private fun encode(bmp: Bitmap, at: Long, scope: String, app: ScreenshotPlan.AppRef?): Result {
+        val scaledBySide = HashMap<Int, Bitmap>()
+        try {
+            val fit = ScreenshotPlan.firstFit({ step ->
+                val (w, h) = ScreenshotPlan.scaled(bmp.width, bmp.height, step.maxSide)
+                val scaled = scaledBySide.getOrPut(step.maxSide) {
+                    scaledBySide.values.forEach { if (it !== bmp) it.recycle() }
+                    scaledBySide.clear()
+                    if (w == bmp.width && h == bmp.height) bmp else Bitmap.createScaledBitmap(bmp, w, h, true)
+                }
+                val out = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.JPEG, step.quality, out)
+                Triple(out.toByteArray(), w, h)
+            }, { it.first.size }) ?: return Result(false, ScreenshotPlan.WHY_TOO_LARGE)
+            val (jpeg, w, h) = fit.second
+            if (fit.first != ScreenshotPlan.STEPS.first()) Log.i(TAG, "Screenshot fit at ${fit.first}")
+            return Result(true, at = at, w = w, h = h, scope = scope, app = app, jpeg = jpeg, data = ScreenshotPlan.dataUrl(jpeg))
         } catch (e: Exception) {
             return Result(false, "Could not make the image (${e.javaClass.simpleName})")
         } finally {
+            scaledBySide.values.forEach { if (it !== bmp) it.recycle() }
             bmp.recycle()
-        }
-        val url = try {
-            upload(jpeg, uid, deviceDocId)
-        } catch (e: Exception) {
-            Log.w(TAG, "Upload failed: ${e.javaClass.simpleName}: ${e.message}")
-            return Result(false, if (e is java.net.UnknownHostException || e is java.net.ConnectException || e is java.net.SocketTimeoutException)
-                "Upload failed: the tablet is offline" else "Upload failed")
-        } ?: return Result(false, "Upload failed")
-        return Result(true, url = url, at = at, w = w, h = h, scope = scope, app = app)
-    }
-
-    /** Unsigned Cloudinary upload (public preset), streamed from memory. Returns secure_url or null. */
-    private fun upload(jpeg: ByteArray, uid: String, deviceDocId: String): String? {
-        val boundary = "kiosk" + UUID.randomUUID().toString().replace("-", "")
-        val body = ScreenshotPlan.multipart(boundary,
-            ScreenshotPlan.formFields(KioskConfig.CLOUDINARY_PRESET, uid, deviceDocId), "screenshot.jpg", jpeg)
-        val conn = URL(ScreenshotPlan.uploadUrl(KioskConfig.CLOUDINARY_CLOUD)).openConnection() as HttpURLConnection
-        try {
-            conn.connectTimeout = 15_000
-            conn.readTimeout = 45_000
-            conn.useCaches = false
-            conn.doOutput = true
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-            conn.setFixedLengthStreamingMode(body.size)
-            conn.outputStream.use { it.write(body) }
-            val code = conn.responseCode
-            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)?.use { it.readBytes().toString(Charsets.UTF_8) }
-            if (code !in 200..299) {
-                Log.w(TAG, "Cloudinary HTTP $code")
-                return null
-            }
-            return ScreenshotPlan.secureUrl(text)
-        } finally {
-            conn.disconnect()
         }
     }
 }

@@ -286,23 +286,52 @@ object DeviceSync {
             .addOnFailureListener { e -> Log.w(TAG, "status.remote update failed", e) }
     }
 
-    /** policy.command screenshot: capture + upload off the main thread, then one update of status.screenshot / status.remote. */
+    /**
+     * policy.command screenshot: capture + encode off the main thread, set() the one items/screenshot subdoc (30 s max), then
+     * one update of status.screenshot (no url; `doc`) + status.remote. A failure writes only status.remote.
+     */
     private fun screenshot(cmd: JSONObject) {
         val id = RemoteCommands.id(cmd) ?: return
-        val uid = uid()
         val docId = deviceDocId(app)
-        if (uid == null || docId == null) { Log.w(TAG, "screenshot: not signed in"); return }
+        if (uid() == null || docId == null) { Log.w(TAG, "screenshot: not signed in"); return }
         val studentId = Prefs.activeStudentId(app)
-        Screenshot.take(app, uid, docId) { r ->
-            KioskLog.add(app, "screenshot", ScreenshotPlan.logLine(r.scope.takeIf { r.ok }, r.why))
+        fun fail(why: String) {
+            KioskLog.add(app, "screenshot", ScreenshotPlan.logLine(null, why))
+            if (auth.currentUser == null) return
+            doc(docId).update("status.remote", RingPlan.remote(id, false, why, System.currentTimeMillis()))
+                .addOnFailureListener { e -> Log.w(TAG, "status.remote update failed", e) }
+        }
+        // Don't let a capture wait for hours in the offline queue.
+        if (!hasNetwork()) return fail(ScreenshotPlan.WHY_OFFLINE)
+        Screenshot.take(app) { r ->
+            if (!r.ok) return@take fail(r.why)
             if (auth.currentUser == null) return@take
-            val now = System.currentTimeMillis()
-            val fields = HashMap<String, Any?>()
-            if (r.ok) fields["status.screenshot"] = ScreenshotPlan.status(id, r.url, r.at, r.w, r.h, r.scope, r.app, studentId)
-            fields["status.remote"] = RingPlan.remote(id, r.ok, r.why, now)
-            doc(docId).update(fields).addOnFailureListener { e -> Log.w(TAG, "status.screenshot update failed", e) }
+            val done = java.util.concurrent.atomic.AtomicBoolean(false)
+            val timeout = Runnable { if (done.compareAndSet(false, true)) fail(ScreenshotPlan.WHY_SLOW) }
+            handler.postDelayed(timeout, ScreenshotPlan.WRITE_TIMEOUT_MS)
+            val sub = ScreenshotPlan.subdoc(id, r.at, r.w, r.h, r.scope, r.app, studentId, r.jpeg, r.data, FieldValue.serverTimestamp())
+            doc(docId).collection(ScreenshotPlan.ITEMS).document(ScreenshotPlan.SUBDOC_ID).set(sub)
+                .addOnCompleteListener { t ->
+                    if (!done.compareAndSet(false, true)) return@addOnCompleteListener
+                    handler.removeCallbacks(timeout)
+                    if (!t.isSuccessful) {
+                        Log.w(TAG, "screenshot subdoc write failed", t.exception)
+                        return@addOnCompleteListener fail(ScreenshotPlan.WHY_SEND)
+                    }
+                    KioskLog.add(app, "screenshot", ScreenshotPlan.logLine(r.scope, "", r.jpeg.size))
+                    val fields = HashMap<String, Any?>()
+                    fields["status.screenshot"] = ScreenshotPlan.status(id, r.at, r.w, r.h, r.scope, r.app, studentId)
+                    fields["status.remote"] = RingPlan.remote(id, true, "", System.currentTimeMillis())
+                    doc(docId).update(fields).addOnFailureListener { e -> Log.w(TAG, "status.screenshot update failed", e) }
+                }
         }
     }
+
+    /** The default network has internet (not necessarily validated: Firestore may still reach the server). */
+    private fun hasNetwork(): Boolean = runCatching {
+        val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
+        cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    }.getOrDefault(true)
 
     /** status.remote {id, ok, why, at} for a command other than ring. */
     private fun reportRemote(cmd: JSONObject, ok: Boolean, why: String) {

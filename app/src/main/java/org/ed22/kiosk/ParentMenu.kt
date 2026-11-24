@@ -140,13 +140,18 @@ object ParentMenu {
             toast(activity, "Full-screen screenshots are on.")
             return
         }
-        val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
-            .putExtra(Intent.EXTRA_COMPONENT_NAME, ShotService.component(activity))
-        val intent = if (android.os.Build.VERSION.SDK_INT >= 31 && details.resolveActivity(activity.packageManager) != null) details
-            else Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+        val intent = accessibilityIntent(activity)
         ShotService.setReturnAfterSetup(activity, true)
         KioskLog.add(activity, "screenshot", "Parent PIN: opened Accessibility settings for full-screen screenshots")
         exit(activity, intent, ParentPause.Kind.SETTINGS)
+    }
+
+    /** Little Explorer's page in Accessibility settings (Android 12+), else the Accessibility list. Also used by first-run setup. */
+    fun accessibilityIntent(ctx: android.content.Context): Intent {
+        val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+            .putExtra(Intent.EXTRA_COMPONENT_NAME, ShotService.component(ctx))
+        return if (android.os.Build.VERSION.SDK_INT >= 31 && details.resolveActivity(ctx.packageManager) != null) details
+            else Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
     }
 
     /** Clears a phone PIN/pattern/password set behind the kiosk (only possible once the reset token is active). */

@@ -133,6 +133,8 @@ object Recovery {
         val lockTaskActive: Boolean,
         /** An allowed Android app opened from the kiosk (AppUsage.openPkg). */
         val appOpen: Boolean,
+        /** PinSetupActivity is in front (first-run steps such as the screenshots step come before MainActivity). */
+        val pinSetupInFront: Boolean = false,
     )
 
     enum class WatchAction { NONE, STRIKE, RELAUNCH }
@@ -144,7 +146,7 @@ object Recovery {
      * still on (file picker, permission prompt, PIN change) is never touched.
      */
     fun watch(w: Watch, strikes: Int): WatchAction = when {
-        w.maintenance || !w.deviceOwner || !w.hasPin || !w.screenOn || w.appOpen -> WatchAction.NONE
+        w.maintenance || !w.deviceOwner || !w.hasPin || !w.screenOn || w.appOpen || w.pinSetupInFront -> WatchAction.NONE
         !w.activityAlive -> WatchAction.RELAUNCH
         w.inForeground || w.lockTaskActive -> WatchAction.NONE
         strikes + 1 >= WATCHDOG_STRIKES -> WatchAction.RELAUNCH

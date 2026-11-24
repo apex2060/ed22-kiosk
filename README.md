@@ -70,9 +70,16 @@ does nothing: factory reset it first.
    ```
    It should print `Success: Device owner set to package org.ed22.kiosk`. If it says there are
    already accounts or users on the device, remove them (or factory reset) and try again.
-5. Open **Little Explorer**. Set the parent PIN (4 to 8 digits). The device locks into the kiosk
+5. (Optional, Android 11+) Let the app turn on full-screen remote screenshots by itself, with no
+   Accessibility settings screen:
+   ```sh
+   adb shell pm grant org.ed22.kiosk android.permission.WRITE_SECURE_SETTINGS
+   ```
+   Without this, first-run setup shows a "Screenshots of the whole screen" step after the PIN
+   (or turn it on later from the parent menu › Screenshots: turn on full screen).
+6. Open **Little Explorer**. Set the parent PIN (4 to 8 digits). The device locks into the kiosk
    and opens https://us.ed22.org/mobile.
-6. (Optional) Leave USB debugging on so you can push updates with adb later. Kids can't reach
+7. (Optional) Leave USB debugging on so you can push updates with adb later. Kids can't reach
    Settings from the kiosk, so it is safe to keep.
 
 After this the kiosk starts on every boot, acts as the home screen, and keeps the screen on

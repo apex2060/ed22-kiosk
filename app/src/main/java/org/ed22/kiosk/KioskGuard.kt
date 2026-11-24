@@ -192,6 +192,7 @@ object KioskWatchdog {
             inForeground = MainActivity.inForeground,
             lockTaskActive = KioskPolicy.isLockTaskActive(app),
             appOpen = AppUsage.openPkg(app) != null,
+            pinSetupInFront = PinSetupActivity.showing,
         )
         when (Recovery.watch(w, strikes)) {
             Recovery.WatchAction.NONE -> strikes = 0

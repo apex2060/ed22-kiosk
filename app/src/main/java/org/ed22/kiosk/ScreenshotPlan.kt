@@ -1,15 +1,12 @@
 package org.ed22.kiosk
 
-import org.json.JSONObject
-
 /**
  * policy.command screenshot: the pure decisions (no Android calls, so JVM tests cover them).
  * The capture itself is in [Screenshot] (own window) and [ShotService] (full screen, Android 11+).
  */
 object ScreenshotPlan {
-    /** Longest side of the uploaded JPEG, and its quality. */
+    /** Longest side of the JPEG at the first step ([STEPS]). */
     const val MAX_SIDE = 1280
-    const val JPEG_QUALITY = 70
     /** Android 11 (API 30): AccessibilityService.takeScreenshot. */
     const val FULL_SCREEN_SDK = 30
     const val KIOSK_LABEL = "Little Explorer"
@@ -55,38 +52,72 @@ object ScreenshotPlan {
         return maxOf(1, Math.round(w * f).toInt()) to maxOf(1, Math.round(h * f).toInt())
     }
 
-    fun folder(uid: String, deviceDocId: String) = "user/$uid/explorerScreens/$deviceDocId"
-    fun tags(deviceDocId: String) = "explorerScreenshot,$deviceDocId"
-    fun uploadUrl(cloud: String) = "https://api.cloudinary.com/v1_1/$cloud/image/upload"
+    /**
+     * First-run setup: offer the full-screen screenshots step after the first PIN (not when changing it) on Android 11+,
+     * when the service is not on yet ([alreadyOn] = enabled in Settings, or just turned on silently via the adb grant).
+     */
+    fun offerSetupStep(sdk: Int, changingPin: Boolean, alreadyOn: Boolean) = sdk >= FULL_SCREEN_SDK && !changingPin && !alreadyOn
 
-    /** The multipart form fields other than `file`. */
-    fun formFields(preset: String, uid: String, deviceDocId: String): List<Pair<String, String>> = listOf(
-        "upload_preset" to preset,
-        "folder" to folder(uid, deviceDocId),
-        "tags" to tags(deviceDocId),
+    /** Firestore's limit is 1 MiB per doc: the data URL stays at or under this many chars (a JPEG of about 512 KB). */
+    const val MAX_DATA_CHARS = 700_000
+    const val MIME = "image/jpeg"
+    const val DATA_PREFIX = "data:image/jpeg;base64,"
+    /** The one screenshot doc per device: share/library/myItems/<deviceDocId>/items/screenshot (overwritten each time). */
+    const val ITEMS = "items"
+    const val SUBDOC_ID = "screenshot"
+    const val DOC_REF = "$ITEMS/$SUBDOC_ID"
+    /** How long the subdoc write may take before the command is reported as failed. */
+    const val WRITE_TIMEOUT_MS = 30_000L
+
+    const val WHY_OFFLINE = "The tablet is offline"
+    const val WHY_SEND = "Could not send the screenshot"
+    const val WHY_SLOW = "Could not send the screenshot (slow network)"
+    const val WHY_TOO_LARGE = "The screenshot is too large"
+
+    /** One JPEG try: longest side [maxSide] px, [quality]. */
+    data class Step(val maxSide: Int, val quality: Int)
+
+    /** Tried in order until the data URL fits [MAX_DATA_CHARS]; one step is usually enough (150-350 KB). */
+    val STEPS = listOf(
+        Step(1280, 70), Step(1280, 60), Step(1280, 50), Step(1280, 40),
+        Step(1024, 50), Step(800, 50), Step(640, 50),
     )
 
-    /** `secure_url` of a Cloudinary upload response, or null. */
-    fun secureUrl(body: String?): String? =
-        runCatching { JSONObject(body ?: "").optString("secure_url") }.getOrNull()?.takeIf { it.startsWith("https://") }
+    /** Chars of the data URL for a JPEG of [bytes] bytes (base64, no line breaks). */
+    fun dataLength(bytes: Int): Int = DATA_PREFIX.length + 4 * ((bytes + 2) / 3)
 
-    /** `status.screenshot`: the latest one only (each capture overwrites it). studentId only. */
-    fun status(id: String, url: String, at: Long, w: Int, h: Int, scope: String, app: AppRef?, studentId: String?): Map<String, Any?> =
-        mapOf("id" to id, "url" to url, "at" to at, "w" to w, "h" to h, "scope" to scope,
-            "app" to app?.toMap(), "studentId" to studentId?.takeIf { it.isNotBlank() })
+    fun fits(bytes: Int) = dataLength(bytes) <= MAX_DATA_CHARS
 
-    /** The device log line. */
-    fun logLine(scope: String?, why: String) =
-        if (scope != null) "Screenshot for the parent ($scope)" else "Screenshot failed: $why"
+    fun dataUrl(jpeg: ByteArray): String = DATA_PREFIX + java.util.Base64.getEncoder().encodeToString(jpeg)
 
-    /** A multipart/form-data body: [fields], then `file` ([fileName], image/jpeg) = [jpeg]. Built in memory (nothing on disk). */
-    fun multipart(boundary: String, fields: List<Pair<String, String>>, fileName: String, jpeg: ByteArray): ByteArray {
-        val out = java.io.ByteArrayOutputStream(jpeg.size + 1024)
-        fun w(s: String) = out.write(s.toByteArray(Charsets.UTF_8))
-        for ((k, v) in fields) w("--$boundary\r\nContent-Disposition: form-data; name=\"$k\"\r\n\r\n$v\r\n")
-        w("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"$fileName\"\r\nContent-Type: image/jpeg\r\n\r\n")
-        out.write(jpeg)
-        w("\r\n--$boundary--\r\n")
-        return out.toByteArray()
+    /**
+     * Encodes with each of [STEPS] until one fits. [encode] returns the JPEG for a step (or throws). Null = still too large
+     * at the smallest step ([WHY_TOO_LARGE]).
+     */
+    fun <T> firstFit(encode: (Step) -> T, size: (T) -> Int): Pair<Step, T>? {
+        for (step in STEPS) {
+            val out = encode(step)
+            if (fits(size(out))) return step to out
+        }
+        return null
     }
+
+    /** The subdoc (field names fixed; studentId only). [updatedOn] is FieldValue.serverTimestamp() on the device. */
+    fun subdoc(id: String, at: Long, w: Int, h: Int, scope: String, app: AppRef?, studentId: String?, jpeg: ByteArray,
+               data: String, updatedOn: Any): Map<String, Any?> = mapOf(
+        "id" to id, "at" to at, "w" to w, "h" to h, "scope" to scope, "app" to app?.toMap(),
+        "studentId" to studentId?.takeIf { it.isNotBlank() }, "mime" to MIME, "bytes" to jpeg.size, "data" to data,
+        "updatedOn" to updatedOn,
+    )
+
+    /** `status.screenshot`: the latest one only (each capture overwrites it). No url: the picture is in [DOC_REF]. */
+    fun status(id: String, at: Long, w: Int, h: Int, scope: String, app: AppRef?, studentId: String?): Map<String, Any?> =
+        mapOf("id" to id, "at" to at, "w" to w, "h" to h, "scope" to scope,
+            "app" to app?.toMap(), "studentId" to studentId?.takeIf { it.isNotBlank() }, "doc" to DOC_REF)
+
+    /** The device log line, e.g. "Screenshot for the parent (screen, 240 KB)". */
+    fun logLine(scope: String?, why: String, bytes: Int = 0) =
+        if (scope != null) "Screenshot for the parent ($scope, ${kb(bytes)} KB)" else "Screenshot failed: $why"
+
+    fun kb(bytes: Int) = (bytes + 512) / 1024
 }
