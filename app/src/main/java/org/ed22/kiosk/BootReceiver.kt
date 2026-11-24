@@ -8,7 +8,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             // A reboot always puts the device back into kiosk mode.
-            Intent.ACTION_BOOT_COMPLETED -> Prefs.setMaintenance(context, false)
+            Intent.ACTION_BOOT_COMPLETED -> Prefs.endPause(context)
             // After a self-update, reopen the kiosk unless a parent had paused it.
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 Updater.setStatus(context, "Updated to ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")

@@ -204,8 +204,10 @@ class MainActivity : AppCompatActivity() {
             finish()
             return
         }
-        Prefs.setMaintenance(this, false)
-        KioskPolicy.apply(this)
+        // A parent's pause from the PIN menu survives Android re-homing (see ParentPause); only a real return ends it.
+        // A rebuild (renderer recovery, low memory) re-delivers the old intent: that is not the parent coming back.
+        if (savedInstanceState != null && Prefs.isMaintenance(this)) pauseDecided = true
+        else if (handlePause(intent, resumeOnly = false).first == ParentPause.Entry.END) KioskPolicy.apply(this)
 
         root = FrameLayout(this)
         webView = WebView(this)
@@ -249,6 +251,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        val (entry, hadPause) = handlePause(intent, resumeOnly = false)
+        if (entry != ParentPause.Entry.END) return
+        if (hadPause) KioskPolicy.apply(this) // onResume starts lock task again
         // System Home while the kiosk is already in front resets it to the start page. Home pressed in
         // another app only brings the kiosk back (it is paused/unfocused then, and the intent carries
         // FLAG_ACTIVITY_BROUGHT_TO_FRONT), so the child continues where they left off.
@@ -258,8 +263,36 @@ class MainActivity : AppCompatActivity() {
         if (isHome && alreadyInFront && ::webView.isInitialized) goHome()
     }
 
+    /** Set when onCreate / onNewIntent already decided about a pause, so the onResume that follows doesn't decide again. */
+    private var pauseDecided = false
+
+    /**
+     * A parent's pause ([Prefs.pause]) on create / new intent / resume: ends it when the parent came back ([ParentPause.onEntry]),
+     * otherwise keeps it (and steps aside or forwards Home). Returns the decision and whether a pause was stored.
+     */
+    private fun handlePause(i: Intent?, resumeOnly: Boolean): Pair<ParentPause.Entry, Boolean> {
+        if (resumeOnly && pauseDecided) { pauseDecided = false; return (if (Prefs.isMaintenance(this)) ParentPause.Entry.KEEP else ParentPause.Entry.END) to false }
+        if (!resumeOnly) pauseDecided = true
+        val s = Prefs.pause(this) ?: return ParentPause.Entry.END to false
+        val isMain = i?.action == Intent.ACTION_MAIN
+        val other = ParentMenu.systemLauncher(this)
+        val e = ParentPause.onEntry(s, System.currentTimeMillis(), isMain && i!!.hasCategory(Intent.CATEGORY_HOME),
+            isMain && i!!.hasCategory(Intent.CATEGORY_LAUNCHER), other != null, resumeOnly)
+        when (e) {
+            ParentPause.Entry.END -> {
+                Prefs.endPause(this)
+                KioskLog.add(this, "parentPause", "Parent pause ended (${s.kind.name.lowercase()}); kiosk locked again")
+            }
+            ParentPause.Entry.STEP_ASIDE -> moveTaskToBack(true)
+            ParentPause.Entry.FORWARD_HOME -> runCatching { startActivity(other!!.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            ParentPause.Entry.KEEP -> Unit
+        }
+        return e to true
+    }
+
     override fun onResume() {
         super.onResume()
+        handlePause(null, resumeOnly = true).let { (e, had) -> if (e == ParentPause.Entry.END && had) KioskPolicy.apply(this) }
         RingDevice.attach()
         AppUsage.end(this)
         if (!::webView.isInitialized) return
