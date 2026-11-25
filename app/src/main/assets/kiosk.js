@@ -143,6 +143,12 @@
       return call('setActiveChild', { studentId: child == null ? null : String(child) });
     },
     signOut: method('signOut'),
+    // House of Learning: end the visiting family's session (does not sign the house out), arm the visit timer, report to the house doc.
+    hol: {
+      end: function (opts) { return call('holEnd', opts || {}); },
+      setVisit: function (opts) { return call('holSetVisit', opts || {}); },
+      report: function (opts) { return call('holReport', opts || {}); }
+    },
 
     // Other installed apps, and launching the ones the device doc's policy allows
     apps: {

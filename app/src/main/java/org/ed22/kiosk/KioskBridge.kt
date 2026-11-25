@@ -272,6 +272,16 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
             "appsUsageByChild" -> call.ok(JSONObject(AppUsage.usageByChildMap(activity)))
             "policySet" -> call.ok(DeviceSync.setLocalPolicy(activity, args.optJSONObject("policy") ?: throw IllegalArgumentException("policy is required")))
             "policyGet" -> call.ok(DeviceSync.policyInfo(activity))
+            "holEnd" -> {
+                HolVisit.end(activity, args.optString("reason").takeIf { it.isNotBlank() && !args.isNull("reason") })
+                call.ok(true)
+            }
+            "holSetVisit" -> {
+                val ends = (args.opt("endsAtMs") as? Number)?.toLong() ?: throw IllegalArgumentException("endsAtMs is required")
+                val warn = (args.opt("warnMin") as? Number)?.toInt()
+                call.ok(HolVisit.setVisit(activity, ends, warn))
+            }
+            "holReport" -> call.ok(HolVisit.report(activity, args))
             "deviceTime" -> call.ok(DeviceSync.timeState(activity).toJson())
             "appsLaunch" -> {
                 DeviceSync.launch(activity, args.optString("package"))

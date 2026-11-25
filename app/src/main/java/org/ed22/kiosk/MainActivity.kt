@@ -242,7 +242,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (savedInstanceState == null || webView.restoreState(savedInstanceState) == null) {
+        if (HolVisit.takeLoadHome(this) || savedInstanceState == null || webView.restoreState(savedInstanceState) == null) {
             webView.loadUrl(KioskConfig.START_URL)
         }
         HistoryReporter.flush(this)
@@ -849,7 +849,16 @@ class MainActivity : AppCompatActivity() {
     fun goHome() {
         if (customView != null) hideCustomView()
         closePopup()
-        webView.loadUrl(KioskConfig.START_URL)
+        if (::webView.isInitialized) webView.loadUrl(KioskConfig.START_URL)
+    }
+
+    /** End of a House of Learning visit: clear cache/history/form data on the main WebView and any popup. */
+    fun wipeWebViews() {
+        closePopup()
+        if (!::webView.isInitialized) return
+        webView.clearCache(true)
+        webView.clearHistory()
+        webView.clearFormData()
     }
 
     fun isGranted(permission: String) =

@@ -23,8 +23,10 @@ object RemoteCommands {
         // status.appUsageByChild entries carry lastMs (when the app was last used that day); launches under 15 s are left out of
         // the report (still counted for limits) (AppUsage).
         "usageLastUsed",
-        // policy.command screenshot -> status.screenshot {id, url, at, w, h, scope, app, studentId} (at least Little Explorer's own window).
+        // policy.command screenshot -> status.screenshot {id, at, w, h, scope, app, studentId, doc} (at least Little Explorer's own window).
         "screenshot",
+        // House of Learning device: visiting family's rules, kiosk.hol.end / setVisit / report, status.hol.
+        "hol",
     )
 
     /** Listed only while the accessibility service can capture the whole screen (Android 11+, enabled and connected). */

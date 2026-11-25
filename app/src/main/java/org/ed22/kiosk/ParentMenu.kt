@@ -79,6 +79,12 @@ object ParentMenu {
         val items = listOfNotNull<Pair<String, () -> Unit>>(
             time?.let { (if (it.allowed) "Screen time: 30 more minutes" else "Screen time is up: give 30 more minutes") to { giveMoreTime(activity) } },
             "Exit kiosk mode" to { exit(activity, null, ParentPause.Kind.EXIT) },
+            HolVisit.visiting(activity).takeIf { it }?.let {
+                "House of Learning: end visit now" to {
+                    HolVisit.end(activity, "parent menu")
+                    toast(activity, "Visit ended.")
+                }
+            },
             "Wi-Fi" to { LockWifiDialog.showParentControls(activity) },
             "Open Wi-Fi settings" to { exit(activity, Intent(Settings.ACTION_WIFI_SETTINGS), ParentPause.Kind.SETTINGS) },
             // Remote screenshots of other apps (Android 11+): one-time Accessibility switch.

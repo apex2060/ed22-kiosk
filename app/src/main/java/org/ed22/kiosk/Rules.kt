@@ -135,15 +135,22 @@ object Rules {
 
     /**
      * The policy in force and its source: the [local] one (kiosk.policy.set) when its `rev` is higher than the
-     * [doc]'s, else the doc's (ties and missing revs go to the doc). `locked` and `command` always come from the doc.
+     * [doc]'s, else the doc's (ties and missing revs go to the doc). `locked`, `command` and `hol` always come from
+     * the doc (so kiosk.getAuth().policy.hol stays set on a House of Learning device).
+     *
+     * [visit]: a House of Learning visit is in progress. The visiting family's local policy (allowedApps, deviceTime,
+     * per-child rules) is enforced even when the house doc's `rev` is newer; locked / command / hol still come from
+     * the house doc. With no local policy, the house doc is used.
      */
-    fun pickPolicy(doc: JSONObject?, local: JSONObject?): Pair<JSONObject, String> {
+    fun pickPolicy(doc: JSONObject?, local: JSONObject?, visit: Boolean = false): Pair<JSONObject, String> {
         val d = doc ?: JSONObject()
-        if (local == null || rev(local) <= rev(d)) return d to "doc"
+        val useLocal = local != null && (visit || rev(local) > rev(d))
+        if (!useLocal) return d to "doc"
         val p = JSONObject(local.toString())
-        p.remove("locked"); p.remove("command")
+        p.remove("locked"); p.remove("command"); p.remove("hol")
         d.opt("locked")?.let { p.put("locked", it) }
         d.opt("command")?.let { p.put("command", it) }
+        d.opt("hol")?.let { p.put("hol", it) }
         return p to "local"
     }
 

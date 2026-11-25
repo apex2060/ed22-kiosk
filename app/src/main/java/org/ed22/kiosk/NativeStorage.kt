@@ -26,6 +26,15 @@ object NativeStorage {
 
     fun keys(ctx: Context) = JSONArray(prefs(ctx).all.keys.sorted())
 
+    /** Drops keys for which [drop] is true (used at the end of a House of Learning visit). */
+    fun clearKeys(ctx: Context, drop: (String) -> Boolean) {
+        val p = prefs(ctx)
+        val ed = p.edit()
+        var any = false
+        for (k in p.all.keys) if (drop(k)) { ed.remove(k); any = true }
+        if (any) ed.apply()
+    }
+
     private fun checkKey(key: String): String {
         require(key.isNotEmpty() && key.length <= MAX_KEY_CHARS) { "Key must be 1 to $MAX_KEY_CHARS characters" }
         return key
