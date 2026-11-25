@@ -75,8 +75,8 @@ does nothing: factory reset it first.
    ```sh
    adb shell pm grant org.ed22.kiosk android.permission.WRITE_SECURE_SETTINGS
    ```
-   Without this, first-run setup shows a "Screenshots of the whole screen" step after the PIN
-   (or turn it on later from the parent menu › Screenshots: turn on full screen).
+   Without this, Take screenshot in the device manager shows only Little Explorer's own window,
+   unless the accessibility service was already turned on.
 6. Open **Little Explorer**. Set the parent PIN (4 to 8 digits). The device locks into the kiosk
    and opens https://us.ed22.org/mobile.
 7. (Optional) Leave USB debugging on so you can push updates with adb later. Kids can't reach
@@ -109,17 +109,31 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 | Option | What it does |
 | --- | --- |
 | Exit kiosk mode | Unlocks the device and goes to the normal home screen. Opening Little Explorer again, or restarting, locks it again. |
+| House of Learning: end visit now | Shown only during a visit. Ends the visiting family's session and returns to Quick Connect. Keeps the tablet's house registration. |
+| House of Learning device: On / Off | A flag stored on this tablet (it survives ending a visit and Account › Sign out). On signs out any personal account and makes this a House of Learning device. Off leaves the house list until you register it again. |
+| Register this tablet | Shown when House of Learning is on but the tablet is not yet registered to a house. Enter the 8-character code from the house Devices tab. The parent PIN is checked only on the tablet and is never sent. |
 | Wi-Fi | Joins or turns Wi-Fi on from inside the kiosk. Shown only after the parent PIN. |
 | Open Wi-Fi settings | Exits kiosk mode and opens Wi-Fi settings. |
 | Reload start page | Goes back to https://us.ed22.org/mobile. |
 | Change PIN | Sets a new parent PIN. |
 | Updates | Shows the installed version, the last update check and its result, with a **Check for updates now** button. |
-| Account | Shows the signed-in Firebase uid, the device doc id, the listener status (including errors such as `PERMISSION_DENIED`) and the apps allowed right now, with a **Sign out** button. |
+| Account | Shows the signed-in Firebase uid, the device doc id, the listener status (including errors such as `PERMISSION_DENIED`) and the apps allowed right now, with a **Sign out** button. Sign out does not turn off House of Learning. |
 | Remove kiosk lock | Removes device-owner status so the app can be uninstalled. Locking again needs a factory reset. |
 
 Allowed apps are listed and opened by the ed22 page itself (the /mobile header apps icon) through `kiosk.apps.list()` / `kiosk.apps.launch()`.
 
 Five wrong PINs in a row lock the prompt for 60 seconds.
+
+There is no Parent Menu item to turn on full-screen remote screenshots. On Android 11+, grant
+`WRITE_SECURE_SETTINGS` during install (Option B, step 5) if the house should see the whole screen
+on a personal device. In House of Learning mode the tablet does not upload screenshots at all.
+
+## House of Learning
+
+A tablet with **House of Learning device** turned on is registered to a house with a pairing code,
+not a personal `/me` account. Visitors use Quick Connect. The house sees the child's name and what
+they have open, not screenshots. Ending a visit wipes the visitor's web session and reloads Quick
+Connect; it does not sign the tablet out of the house or clear the Parent Menu toggle.
 
 ## Navigation
 

@@ -109,12 +109,17 @@ class HolPlanTest {
     }
 
     @Test
-    fun featureIsListedAndHolLogoutIsNotRunNatively() {
+    fun featureIsListedAndHolLogoutRunsOnceWhileFreshEvenWhenLocked() {
         assertTrue(HolPlan.FEATURE in RemoteCommands.FEATURES)
         assertTrue("hol" in RemoteCommands.features(false))
-        // holLogout is for the page (kiosk.on('policy')); the app ignores unknown types.
-        assertFalse("holLogout" in RemoteCommands.TIMED_TYPES)
-        val d = RemoteCommands.decide(JSONObject().put("id", "x").put("type", "holLogout"), null, t0, false) { true }
-        assertTrue(d.run && d.handled)
+        // Timed so a stale command after reboot cannot end a new visit; also allowed while locked.
+        assertTrue("holLogout" in RemoteCommands.TIMED_TYPES)
+        assertTrue("holLogout" in RemoteCommands.RING_TYPES)
+        val fresh = RemoteCommands.decide(JSONObject().put("id", t0.toString()).put("type", "holLogout"), null, t0 + 1_000, locked = true) { false }
+        assertTrue(fresh.run && fresh.handled)
+        val again = RemoteCommands.decide(JSONObject().put("id", t0.toString()).put("type", "holLogout"), t0.toString(), t0 + 2_000, false) { true }
+        assertFalse(again.run)
+        val stale = RemoteCommands.decide(JSONObject().put("id", "x").put("type", "holLogout"), null, t0, false) { true }
+        assertFalse(stale.run); assertTrue(stale.handled)
     }
 }

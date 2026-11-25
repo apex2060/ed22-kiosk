@@ -85,12 +85,12 @@ object ParentMenu {
                     toast(activity, "Visit ended.")
                 }
             },
+            "House of Learning device: ${if (HolDevice.on(activity)) "On" else "Off"}" to { toggleHol(activity) },
+            HolDevice.needsPairing(activity).takeIf { it }?.let {
+                "Register this tablet" to { promptPair(activity) }
+            },
             "Wi-Fi" to { LockWifiDialog.showParentControls(activity) },
             "Open Wi-Fi settings" to { exit(activity, Intent(Settings.ACTION_WIFI_SETTINGS), ParentPause.Kind.SETTINGS) },
-            // Remote screenshots of other apps (Android 11+): one-time Accessibility switch.
-            (android.os.Build.VERSION.SDK_INT >= ScreenshotPlan.FULL_SCREEN_SDK).takeIf { it }?.let {
-                (if (ShotService.ready) "Screenshots: full screen is on" else "Screenshots: turn on full screen") to { showScreenshots(activity) }
-            },
             "Reload start page" to { activity.goHome() },
             "Change PIN" to {
                 activity.startActivity(Intent(activity, PinSetupActivity::class.java).putExtra(PinSetupActivity.EXTRA_CHANGE, true))
@@ -108,63 +108,93 @@ object ParentMenu {
             .present(activity)
     }
 
-    /**
-     * Full-screen remote screenshots: Android Settings › Accessibility › Little Explorer. A device owner can only allowlist the
-     * service (KioskPolicy.allowShotService), so the parent turns it on there; the kiosk comes back when it connects.
-     */
-    private fun showScreenshots(activity: MainActivity) {
-        val on = ShotService.ready
-        val msg = if (on) {
-            "Take screenshot in the device manager shows the whole screen, including other apps.\n\n" +
-                "To turn it off: Android Settings › Accessibility › Little Explorer."
-        } else {
-            "Take screenshot in the device manager now shows only Little Explorer. To see other apps too:\n\n" +
-                "1. Tap Open Accessibility settings.\n" +
-                "2. Tap Little Explorer (it may be under Downloaded or Installed apps) and turn it on, then Allow.\n" +
-                "3. Little Explorer comes back by itself.\n\n" +
-                "If the switch is greyed out (\"Restricted setting\"), tap App info instead, then ⋮ › Allow restricted settings, and come back here."
-        }
-        val builder = AlertDialog.Builder(activity)
-            .setTitle("Screenshots")
-            .setMessage(msg)
-            .setNegativeButton("Close", null)
-        if (!on) {
-            builder.setPositiveButton("Open Accessibility settings") { _, _ -> openAccessibility(activity) }
-            builder.setNeutralButton("App info") { _, _ ->
-                exit(activity, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${activity.packageName}")),
-                    ParentPause.Kind.SETTINGS)
-            }
-        }
-        builder.create().present(activity)
-    }
-
-    private fun openAccessibility(activity: MainActivity) {
-        runCatching { KioskPolicy.allowShotService(activity) }
-        // adb-granted WRITE_SECURE_SETTINGS (optional): no Settings screen needed.
-        if (ShotService.enableSilently(activity)) {
-            KioskLog.add(activity, "screenshot", "Parent PIN: full-screen screenshots turned on")
-            toast(activity, "Full-screen screenshots are on.")
-            return
-        }
-        val intent = accessibilityIntent(activity)
-        ShotService.setReturnAfterSetup(activity, true)
-        KioskLog.add(activity, "screenshot", "Parent PIN: opened Accessibility settings for full-screen screenshots")
-        exit(activity, intent, ParentPause.Kind.SETTINGS)
-    }
-
-    /** Little Explorer's page in Accessibility settings (Android 12+), else the Accessibility list. Also used by first-run setup. */
-    fun accessibilityIntent(ctx: android.content.Context): Intent {
-        val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
-            .putExtra(Intent.EXTRA_COMPONENT_NAME, ShotService.component(ctx))
-        return if (android.os.Build.VERSION.SDK_INT >= 31 && details.resolveActivity(ctx.packageManager) != null) details
-            else Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-    }
-
     /** Clears a phone PIN/pattern/password set behind the kiosk (only possible once the reset token is active). */
     private fun removeScreenLock(activity: MainActivity) {
         val r = ScreenLock.clear(activity, "parent menu")
         toast(activity, if (r.ok) "Phone screen lock removed." else "Could not remove the screen lock: ${r.why}")
         DeviceSync.reportStatus(activity)
+    }
+
+    /**
+     * Local device flag only. On signs out any personal account and leaves this tablet ready to
+     * register with a house pairing code. Off leaves the house list until a new code is entered.
+     * [HolDevice] prefs survive [DeviceSync.signOut] and visit end.
+     */
+    private fun toggleHol(activity: MainActivity) {
+        if (HolDevice.on(activity)) {
+            confirm(activity, "Turn off House of Learning?",
+                "This tablet will leave the house list until you register it again.") {
+                if (HolVisit.visiting(activity)) HolVisit.end(activity, "parent menu")
+                HolDevice.setOn(activity, false)
+                toast(activity, "House of Learning is off.")
+            }
+        } else {
+            confirm(activity, "Turn this tablet into a House of Learning device?",
+                "Any personal account on this tablet will be signed out. Visitors can use Quick Connect. " +
+                    "The house will see the child's name and what they have open, not screenshots.") {
+                if (HolVisit.visiting(activity)) HolVisit.end(activity, "parent menu")
+                HolDevice.setOn(activity, true)
+                toast(activity, "House of Learning is on.")
+                promptPair(activity)
+            }
+        }
+    }
+
+    private var pairInFlight = false
+
+    private fun promptPair(activity: MainActivity) {
+        if (!HolDevice.on(activity)) return
+        if (HolDevice.registered(activity)) {
+            toast(activity, "This tablet is already registered.")
+            return
+        }
+        val input = EditText(activity).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            hint = "8-character code"
+            filters = arrayOf(InputFilter.LengthFilter(HolDevicePlan.CODE_LEN))
+        }
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Register this tablet")
+            .setMessage("Enter the 8-character code from the house Devices tab.")
+            .setView(padded(activity, input))
+            .setPositiveButton("Register", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+        dialog.setOnShowListener {
+            val go = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            go.setOnClickListener {
+                val code = HolDevicePlan.sanitizeCode(input.text.toString())
+                if (!HolDevicePlan.codeReady(code)) {
+                    input.error = "Enter the 8-character code"
+                    return@setOnClickListener
+                }
+                if (pairInFlight) return@setOnClickListener
+                pairInFlight = true
+                go.isEnabled = false
+                HolDevice.pair(activity, code) { r ->
+                    pairInFlight = false
+                    if (activity.isFinishing || activity.isDestroyed) return@pair
+                    r.fold(
+                        onSuccess = {
+                            dialog.dismiss()
+                            toast(activity, "This tablet is registered to the house.")
+                        },
+                        onFailure = { e ->
+                            go.isEnabled = true
+                            input.error = e.message?.takeIf { it.isNotBlank() } ?: "Could not register this tablet."
+                        },
+                    )
+                }
+            }
+        }
+        dialog.present(activity)
+    }
+
+    /** Keeps hol.on and the group path. Ends a visit first so a signed-out device is not mid-session. */
+    private fun signOutAccount(activity: MainActivity) {
+        if (HolVisit.visiting(activity)) HolVisit.end(activity, "parent menu")
+        DeviceSync.signOut()
+        toast(activity, if (HolDevice.on(activity)) "Signed out. House of Learning stays on." else "Signed out.")
     }
 
     /** The same 30 minutes as "+30 min" in the device manager, granted here with the PIN (works offline). */
@@ -201,12 +231,19 @@ object ParentMenu {
             .setMessage(message)
             .setNegativeButton("Close", null)
         if (DeviceSync.uid() != null) {
-            builder.setPositiveButton("Sign out") { _, _ ->
-                DeviceSync.signOut()
-                toast(activity, "Signed out")
-            }
+            builder.setPositiveButton("Sign out") { _, _ -> signOutAccount(activity) }
         }
         builder.create().present(activity)
+    }
+
+    private fun confirm(activity: MainActivity, title: String, message: String, then: () -> Unit) {
+        AlertDialog.Builder(activity)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("OK") { _, _ -> then() }
+            .setNegativeButton("Cancel", null)
+            .create()
+            .present(activity)
     }
 
     private fun confirmRemove(activity: MainActivity) {

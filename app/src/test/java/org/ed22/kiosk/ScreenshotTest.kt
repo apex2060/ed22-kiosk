@@ -162,21 +162,12 @@ class ScreenshotTest {
     }
 
     @Test
-    fun setupStepOnlyOnAndroid11PlusFirstRunAndWhenOff() {
-        assertTrue(ScreenshotPlan.offerSetupStep(30, changingPin = false, alreadyOn = false))
-        assertTrue(ScreenshotPlan.offerSetupStep(34, changingPin = false, alreadyOn = false))
-        assertFalse(ScreenshotPlan.offerSetupStep(29, changingPin = false, alreadyOn = false)) // Android 8-10
-        assertFalse(ScreenshotPlan.offerSetupStep(26, changingPin = false, alreadyOn = false))
-        assertFalse(ScreenshotPlan.offerSetupStep(34, changingPin = true, alreadyOn = false))  // changing the PIN
-        assertFalse(ScreenshotPlan.offerSetupStep(34, changingPin = false, alreadyOn = true))  // on already / adb grant
-        // The watchdog doesn't open the kiosk over the step (the PIN is already set, MainActivity not started yet).
+    fun watchdogStandsDownWhilePinSetupIsInFront() {
+        // Changing the PIN (or first-run setup) must not be covered by the kiosk watchdog.
         val w = Recovery.Watch(maintenance = false, deviceOwner = true, hasPin = true, screenOn = true, activityAlive = false,
             inForeground = false, lockTaskActive = true, appOpen = false, pinSetupInFront = true)
         assertEquals(Recovery.WatchAction.NONE, Recovery.watch(w, 0))
         assertEquals(Recovery.WatchAction.RELAUNCH, Recovery.watch(w.copy(pinSetupInFront = false), 0))
-        assertEquals("Screenshots of the whole screen", PinSetupActivity.SHOT_TITLE)
-        assertEquals("Lets you see this tablet's screen from the device manager, including other apps. " +
-            "Tap Turn on, then turn on Little Explorer and tap Allow.", PinSetupActivity.SHOT_BODY)
     }
 
     @Test

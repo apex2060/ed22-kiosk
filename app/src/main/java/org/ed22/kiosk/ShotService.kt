@@ -19,7 +19,7 @@ import java.util.concurrent.Executor
 /**
  * Full-screen remote screenshots (Android 11+): an accessibility service whose only ability is takeScreenshot
  * (no events, no window content; see res/xml/shot_service.xml). A parent turns it on once in Android Settings ›
- * Accessibility › Little Explorer (parent menu › "Screenshots: turn on full screen"). While it is connected,
+ * Accessibility › Little Explorer (adb can grant WRITE_SECURE_SETTINGS so the app turns this on itself). While it is connected,
  * status.features lists 'screenshotFull'. Capturing shows nothing on the tablet.
  */
 class ShotService : AccessibilityService() {

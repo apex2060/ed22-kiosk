@@ -52,12 +52,6 @@ object ScreenshotPlan {
         return maxOf(1, Math.round(w * f).toInt()) to maxOf(1, Math.round(h * f).toInt())
     }
 
-    /**
-     * First-run setup: offer the full-screen screenshots step after the first PIN (not when changing it) on Android 11+,
-     * when the service is not on yet ([alreadyOn] = enabled in Settings, or just turned on silently via the adb grant).
-     */
-    fun offerSetupStep(sdk: Int, changingPin: Boolean, alreadyOn: Boolean) = sdk >= FULL_SCREEN_SDK && !changingPin && !alreadyOn
-
     /** Firestore's limit is 1 MiB per doc: the data URL stays at or under this many chars (a JPEG of about 512 KB). */
     const val MAX_DATA_CHARS = 700_000
     const val MIME = "image/jpeg"

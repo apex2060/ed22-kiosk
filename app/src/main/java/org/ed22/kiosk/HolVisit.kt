@@ -24,8 +24,10 @@ import org.json.JSONObject
  * (wipe the page session, drop the visitor policy, keep the house signed in) from kiosk.hol.end,
  * a safety-net AlarmManager timer, boot / app start, or the parent menu.
  *
- * Does not call [DeviceSync.signOut]. Screenshots stay allowed. Parent pauses (#15) are respected:
- * ending a visit never reclaims the screen while the parent is in Settings or has exited kiosk mode.
+ * Does not call [DeviceSync.signOut] and does not clear [HolDevice] prefs (`hol.on` and the group path stay).
+ * Screenshots stay allowed on a personal device; they are skipped while House of Learning mode is on.
+ * Parent pauses (#15) are respected: ending a visit never reclaims the screen while the parent is in Settings
+ * or has exited kiosk mode.
  */
 object HolVisit {
     private const val PREFS = "kiosk_hol"
@@ -36,6 +38,7 @@ object HolVisit {
     private const val KEY_NAME = "name"
     private const val KEY_STUDENT = "studentId"
     private const val KEY_LAST = "last"
+    private const val KEY_CURRENT = "current"
     private const val KEY_LOAD_HOME = "loadHome"
     private const val CHANNEL = "hol"
     private const val NOTIFY_ID = 22_022
@@ -59,6 +62,23 @@ object HolVisit {
         val ends = p.getLong(KEY_ENDS, 0L)
         if (ends <= 0L) return null
         return HolPlan.Visit(ends, p.getInt(KEY_WARN_MIN, HolPlan.DEFAULT_WARN_MIN))
+    }
+
+    data class ExplorerState(
+        val visiting: Boolean,
+        val name: String?,
+        val studentId: String?,
+        val current: Any?,
+        val last: Map<String, Any?>?,
+    )
+
+    /** Name / current / student for the group explorer doc (no tool totals, no screenshot). */
+    fun explorerState(ctx: Context): ExplorerState {
+        val p = prefs(ctx)
+        val current = p.getString(KEY_CURRENT, null)?.let { raw ->
+            runCatching { JSONObject(raw) }.getOrNull()?.let { firebaseValue(it) }
+        }
+        return ExplorerState(visiting(ctx), p.getString(KEY_NAME, null), p.getString(KEY_STUDENT, null), current, lastMap(p))
     }
 
     /** App start / process start: end a visit whose time has already passed, before the page loads; otherwise arm the timer. */
@@ -97,6 +117,7 @@ object HolVisit {
             KioskLog.add(c, HolPlan.LOG_KIND, "HOL visit extended")
         } else {
             KioskLog.add(c, HolPlan.LOG_KIND, "HOL visit armed")
+            audit(c, HolDevicePlan.AUDIT_START)
         }
         return JSONObject().put("endsAtMs", visit.endsAtMs).put("warnMin", visit.warnMin)
     }
@@ -123,6 +144,7 @@ object HolVisit {
 
     private fun endNow(ctx: Context, why: String) {
         val was = visiting(ctx)
+        val endDetail = explorerState(ctx)
         disarmed(ctx)
 
         // 1. WebView state (IndexedDB / Firebase web session, cookies, cache, history), including popups.
@@ -153,14 +175,17 @@ object HolVisit {
         val at = System.currentTimeMillis()
         val ended = HolPlan.endedStatus(at, why)
         prefs(ctx).edit().putString(KEY_LAST, JSONObject(mapOf("at" to at, "why" to why)).toString())
-            .remove(KEY_NAME).remove(KEY_STUDENT).commit()
+            .remove(KEY_NAME).remove(KEY_STUDENT).remove(KEY_CURRENT).commit()
         writeEnded(ctx, ended)
 
         // 9. Drop the visitor's local policy so the house doc's policy is in force again.
         prefs(ctx).edit().putBoolean(KEY_VISITOR, false).remove(KEY_ENDS).remove(KEY_WARN_MIN).remove(KEY_WARNED_FOR).commit()
         DeviceSync.dropLocalPolicy(ctx)
 
-        if (was) KioskLog.add(ctx, HolPlan.LOG_KIND, HolPlan.endLog(why), important = true)
+        if (was) {
+            KioskLog.add(ctx, HolPlan.LOG_KIND, HolPlan.endLog(why), important = true)
+            audit(ctx, HolDevicePlan.AUDIT_END, endDetail)
+        }
         DeviceSync.reportSoon()
     }
 
@@ -190,23 +215,39 @@ object HolVisit {
         }
         ed.commit()
         if (args.has("activeStudentId")) DeviceSync.setActiveChild(c, sid)
-        val hol = if (visiting(c) || ends > 0L) HolPlan.visitingStatus(ends, sid, name, lastMap(p))
-        else HolPlan.restingStatus(false, lastMap(p)).toMutableMap().also {
-            if (sid != null) it["studentId"] = sid
-            if (name != null) it["name"] = name
-        }
-        val fields = HashMap<String, Any?>()
-        putHolFields(fields, hol)
-        if (args.has("activeStudentId")) {
-            fields["activeStudentId"] = sid ?: FieldValue.delete()
-        }
         if (args.has("current")) {
-            fields["status.current"] = if (args.isNull("current")) FieldValue.delete() else firebaseValue(args.opt("current")) ?: FieldValue.delete()
+            if (args.isNull("current")) p.edit().remove(KEY_CURRENT).commit()
+            else p.edit().putString(KEY_CURRENT, args.opt("current").toString()).commit()
         }
-        if (args.has("remote") && !args.isNull("remote")) {
-            fields["status.remote"] = firebaseValue(args.opt("remote"))
+        val current = firebaseValue(args.opt("current")).takeIf { args.has("current") && !args.isNull("current") }
+            ?: explorerState(c).current
+        if (HolDevice.explorerRef(c) != null) {
+            val fields = HashMap<String, Any?>()
+            fields["visiting"] = visiting(c) || ends > 0L
+            fields["name"] = name ?: ""
+            if (args.has("activeStudentId") || sid != null) fields["activeStudentId"] = sid ?: FieldValue.delete()
+            if (args.has("current") || current != null) fields["current"] = current ?: FieldValue.delete()
+            fields["updatedOn"] = FieldValue.serverTimestamp()
+            write(c, fields)
+        } else {
+            val hol = if (visiting(c) || ends > 0L) HolPlan.visitingStatus(ends, sid, name, lastMap(p))
+            else HolPlan.restingStatus(false, lastMap(p)).toMutableMap().also {
+                if (sid != null) it["studentId"] = sid
+                if (name != null) it["name"] = name
+            }
+            val fields = HashMap<String, Any?>()
+            putHolFields(fields, hol)
+            if (args.has("activeStudentId")) {
+                fields["activeStudentId"] = sid ?: FieldValue.delete()
+            }
+            if (args.has("current")) {
+                fields["status.current"] = current ?: FieldValue.delete()
+            }
+            if (args.has("remote") && !args.isNull("remote")) {
+                fields["status.remote"] = firebaseValue(args.opt("remote"))
+            }
+            write(c, fields)
         }
-        write(c, fields)
         return JSONObject().put("ok", true)
     }
 
@@ -334,17 +375,46 @@ object HolVisit {
     }
 
     private fun writeHol(ctx: Context, hol: Map<String, Any?>) {
-        val fields = HashMap<String, Any?>()
-        putHolFields(fields, hol)
-        write(ctx, fields)
+        if (HolDevice.explorerRef(ctx) != null) {
+            val st = explorerState(ctx)
+            write(ctx, mapOf(
+                "visiting" to true,
+                "name" to (st.name ?: ""),
+                "activeStudentId" to (st.studentId ?: FieldValue.delete()),
+                "current" to (st.current ?: FieldValue.delete()),
+                "updatedOn" to FieldValue.serverTimestamp(),
+            ))
+        } else {
+            val fields = HashMap<String, Any?>()
+            putHolFields(fields, hol)
+            write(ctx, fields)
+        }
     }
 
     private fun writeEnded(ctx: Context, hol: Map<String, Any?>) {
-        val fields = HashMap<String, Any?>()
-        putHolFields(fields, hol)
-        fields["activeStudentId"] = FieldValue.delete()
-        fields["status.current"] = FieldValue.delete()
-        write(ctx, fields)
+        if (HolDevice.explorerRef(ctx) != null) {
+            write(ctx, mapOf(
+                "visiting" to false,
+                "name" to "",
+                "current" to FieldValue.delete(),
+                "activeStudentId" to FieldValue.delete(),
+                "last" to (hol["last"] ?: FieldValue.delete()),
+                "updatedOn" to FieldValue.serverTimestamp(),
+            ))
+        } else {
+            val fields = HashMap<String, Any?>()
+            putHolFields(fields, hol)
+            fields["activeStudentId"] = FieldValue.delete()
+            fields["status.current"] = FieldValue.delete()
+            write(ctx, fields)
+        }
+    }
+
+    private fun audit(ctx: Context, type: String, st: ExplorerState = explorerState(ctx)) {
+        if (HolDevice.explorerRef(ctx) == null) return
+        HolDevice.writeAudit(ctx, type, HolDevicePlan.auditDetail(
+            Prefs.deviceId(ctx), HolDevice.title(ctx), st.name, st.current,
+        ))
     }
 
     /** Nested nulls become FieldValue.delete() on dotted paths so Firestore actually stores a cleared visit. */
@@ -357,10 +427,9 @@ object HolVisit {
 
     private fun write(ctx: Context, fields: Map<String, Any?>) {
         if (fields.isEmpty()) return
-        val id = DeviceSync.deviceDocId(ctx) ?: return
         if (!DeviceSync.isSignedIn()) return
-        FirebaseFirestore.getInstance().collection("share").document("library").collection("myItems").document(id)
-            .update(fields)
+        val ref = DeviceSync.deviceRef(ctx) ?: return
+        ref.update(fields)
             .addOnFailureListener { e -> android.util.Log.w("HolVisit", "status.hol update failed", e) }
     }
 

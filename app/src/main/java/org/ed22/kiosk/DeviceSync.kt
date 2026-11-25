@@ -111,7 +111,11 @@ object DeviceSync {
     private fun inForce(ctx: Context) = Rules.pickPolicy(stored(ctx, KEY_POLICY), stored(ctx, KEY_LOCAL_POLICY), HolVisit.visiting(ctx))
 
     /** The policy in force: the doc's, or the page-pushed one when its `rev` is higher (see [Rules.pickPolicy]). */
-    fun policy(ctx: Context = app): JSONObject = inForce(ctx).first
+    fun policy(ctx: Context = app): JSONObject {
+        val p = JSONObject(inForce(ctx).first.toString())
+        // Local parent-menu toggle is the source of truth for policy.hol, including when signed out.
+        return HolDevicePlan.applyLocalHol(p, HolDevice.on(ctx), HolDevice.serviceId(ctx), HolDevice.warnMin(ctx))
+    }
 
     /** 'doc' or 'local'. */
     fun policySource(ctx: Context = app): String = inForce(ctx).second
@@ -121,7 +125,9 @@ object DeviceSync {
 
     /** kiosk.policy.set: saves [p] (minus locked / command / hol) as the local policy and applies it if it is newer (or during a HOL visit). */
     fun setLocalPolicy(ctx: Context, p: JSONObject): JSONObject {
-        if (!isSignedIn()) throw IllegalStateException("Not signed in")
+        if (!HolDevicePlan.canSetLocalPolicy(isSignedIn(), HolDevice.on(ctx))) {
+            throw IllegalStateException("Not signed in")
+        }
         val local = JSONObject(p.toString()).apply { remove("locked"); remove("command"); remove("hol") }
         prefs(ctx).edit().putString(KEY_LOCAL_POLICY, local.toString()).commit()
         applyPolicy()
@@ -162,6 +168,7 @@ object DeviceSync {
     fun signOut() {
         stopListener()
         auth.signOut()
+        // Visit timers are cleared; the parent-menu hol.on flag and group path are in a different file and stay.
         HolVisit.clearLocal(app)
         prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_LOCAL_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).remove(KEY_LOG_HASH).remove(KEY_TIME_HASH).remove(KEY_LOCAL_EXTRA).apply()
         listenerStatus = "Not signed in"
@@ -183,8 +190,19 @@ object DeviceSync {
         applyPolicy()
     }
 
-    private fun doc(docId: String): DocumentReference =
+    private fun myItems(docId: String): DocumentReference =
         FirebaseFirestore.getInstance().collection("share").document("library").collection("myItems").document(docId)
+
+    /** The house explorer doc when this is a registered HOL tablet, otherwise the personal myItems doc. */
+    fun deviceRef(ctx: Context = app): DocumentReference? {
+        HolDevice.explorerRef(ctx)?.let { return it }
+        val id = deviceDocId(ctx) ?: return null
+        if (HolDevicePlan.isExplorerPath(id)) return FirebaseFirestore.getInstance().document(id)
+        if (id.contains("/share/admin")) return null
+        return myItems(id)
+    }
+
+    private fun doc(docId: String): DocumentReference = deviceRef() ?: myItems(docId)
 
     private fun stopListener() {
         handler.removeCallbacks(retry)
@@ -196,9 +214,9 @@ object DeviceSync {
 
     private fun startListener() {
         stopListener()
-        val docId = deviceDocId() ?: return
+        val ref = deviceRef() ?: return
         listenerStatus = "Connecting…"
-        registration = doc(docId).addSnapshotListener { snap, error ->
+        registration = ref.addSnapshotListener { snap, error ->
             if (error != null) {
                 Log.w(TAG, "Device doc listener failed: ${error.code}", error)
                 listenerStatus = "Error: ${error.code} ${error.message ?: ""}".trim()
@@ -213,6 +231,8 @@ object DeviceSync {
             listenerStatus = "Listening (updated ${DateFormat.getTimeInstance().format(Date())}" +
                 (if (snap.metadata.isFromCache) ", from cache)" else ")")
             val policy = (toJson(snap.get("policy")) as? JSONObject) ?: JSONObject()
+            // Group explorer docs write command at the top level; personal docs keep it under policy.command.
+            (toJson(snap.get("command")) as? JSONObject)?.let { policy.put("command", it) }
             prefs(app).edit().putString(KEY_POLICY, policy.toString()).apply()
             // /mobile's activeStudentId: applied when it changes in the doc; kiosk.setActiveChild overrides it locally.
             val docSid = Rules.docActiveStudentId(snap.get("activeStudentId"))
@@ -283,8 +303,10 @@ object DeviceSync {
                 reportRemote(cmd, r.ok, r.why)
                 reportStatus(app)
             }
-            // Remote screenshot (also while locked): status.screenshot (latest only) + status.remote; silent on the tablet.
+            // Remote screenshot (also while locked). Skipped entirely in House of Learning mode (name + current item only).
             "screenshot" -> onMain { screenshot(cmd) }
+            // End the visiting family's session; keep the hol-device identity and hol.on.
+            "holLogout" -> HolVisit.end(app, "house")
             else -> Log.w(TAG, "Unknown command type: ${cmd.optString("type")}")
         }
     }
@@ -308,6 +330,10 @@ object DeviceSync {
      * one update of status.screenshot (no url; `doc`) + status.remote. A failure writes only status.remote.
      */
     private fun screenshot(cmd: JSONObject) {
+        if (!HolDevicePlan.allowScreenshot(HolDevice.on(app))) {
+            Log.i(TAG, "Screenshot skipped (House of Learning device)")
+            return
+        }
         val id = RemoteCommands.id(cmd) ?: return
         val docId = deviceDocId(app)
         if (uid() == null || docId == null) { Log.w(TAG, "screenshot: not signed in"); return }
@@ -795,6 +821,7 @@ object DeviceSync {
      */
     fun reportStatus(ctx: Context): com.google.android.gms.tasks.Task<Void>? {
         if (auth.currentUser == null) return null
+        if (HolDevice.on(ctx) && HolDevice.explorerRef(ctx) != null) return reportExplorer(ctx)
         val id = deviceDocId(ctx) ?: return null
         val fields = HashMap<String, Any>()
         statusMap(ctx).forEach { (k, v) -> fields["status.$k"] = v }
@@ -840,6 +867,28 @@ object DeviceSync {
                 if (sendTime) p.edit().putString(KEY_TIME_HASH, timeHash).apply()
             }
             .addOnFailureListener { e -> Log.w(TAG, "Status update failed", e) }
+    }
+
+    /**
+     * Group explorer doc: top-level online / appVersion / battery / visiting / name / current /
+     * activeStudentId / last / updatedOn only. No screenshot, no tool-usage totals, no personal status.*.
+     */
+    private fun reportExplorer(ctx: Context): com.google.android.gms.tasks.Task<Void>? {
+        val ref = HolDevice.explorerRef(ctx) ?: return null
+        val battery = DeviceInfo.battery(ctx)
+        val hol = HolVisit.explorerState(ctx)
+        val fields = HashMap<String, Any?>()
+        fields["online"] = true
+        fields["appVersion"] = BuildConfig.VERSION_NAME
+        fields["battery"] = battery.optInt("level", 0) / 100.0
+        fields["visiting"] = hol.visiting
+        fields["name"] = hol.name ?: ""
+        fields["current"] = hol.current ?: FieldValue.delete()
+        fields["activeStudentId"] = hol.studentId ?: FieldValue.delete()
+        fields["last"] = hol.last ?: FieldValue.delete()
+        fields["updatedOn"] = FieldValue.serverTimestamp()
+        return ref.update(fields)
+            .addOnFailureListener { e -> Log.w(TAG, "explorer status update failed", e) }
     }
 
     private val reportSoonRunnable = Runnable { runCatching { reportStatus(app) } }

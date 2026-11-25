@@ -136,7 +136,8 @@ object Rules {
     /**
      * The policy in force and its source: the [local] one (kiosk.policy.set) when its `rev` is higher than the
      * [doc]'s, else the doc's (ties and missing revs go to the doc). `locked`, `command` and `hol` always come from
-     * the doc (so kiosk.getAuth().policy.hol stays set on a House of Learning device).
+     * the doc. DeviceSync.policy() then overlays the parent-menu hol.on flag, which is the source
+     * of truth for House of Learning mode (including when signed out).
      *
      * [visit]: a House of Learning visit is in progress. The visiting family's local policy (allowedApps, deviceTime,
      * per-child rules) is enforced even when the house doc's `rev` is newer; locked / command / hol still come from

@@ -204,7 +204,6 @@ class MainActivity : AppCompatActivity() {
             finish()
             return
         }
-        PinSetupActivity.closeSetup()
         // A parent's pause from the PIN menu survives Android re-homing (see ParentPause); only a real return ends it.
         // A rebuild (renderer recovery, low memory) re-delivers the old intent: that is not the parent coming back.
         if (savedInstanceState != null && Prefs.isMaintenance(this)) pauseDecided = true
