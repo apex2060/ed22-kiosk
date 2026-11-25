@@ -117,13 +117,14 @@ class RulesExtrasTest {
 
     @Test
     fun revPrecedence() {
-        val doc = j("""{"rev":100,"allowedApps":[{"package":"doc"}],"locked":true,"command":{"id":"c1","type":"reload"}}""")
+        val doc = j("""{"rev":100,"allowedApps":[{"package":"doc"}],"locked":true,"command":{"id":"c1","type":"reload"},"hol":{"on":true}}""")
         val newerLocal = j("""{"rev":200,"allowedApps":[{"package":"local"}],"locked":false,"command":{"id":"x"}}""")
         val (p, src) = Rules.pickPolicy(doc, newerLocal)
         assertEquals("local", src)
         assertEquals("local", p.getJSONArray("allowedApps").getJSONObject(0).getString("package"))
-        assertEquals(true, p.getBoolean("locked"))                                  // locked / command from the doc
+        assertEquals(true, p.getBoolean("locked"))                                  // locked / command / hol from the doc
         assertEquals("c1", p.getJSONObject("command").getString("id"))
+        assertEquals(true, p.getJSONObject("hol").getBoolean("on"))
         assertEquals("doc", Rules.pickPolicy(doc.put("rev", 300), newerLocal).second) // doc newer
         assertEquals("doc", Rules.pickPolicy(doc.put("rev", 200), newerLocal).second) // tie -> doc
         assertEquals("local", Rules.pickPolicy(j("""{"allowedApps":[]}"""), newerLocal).second) // missing doc rev = 0

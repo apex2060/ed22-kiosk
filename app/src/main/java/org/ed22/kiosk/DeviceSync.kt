@@ -86,6 +86,7 @@ object DeviceSync {
     fun init(ctx: Context) {
         app = ctx.applicationContext
         ScreenTime.start(app)
+        HolVisit.onStart(app)
         enforce(app)
         val wm = WorkManager.getInstance(app)
         wm.enqueueUniquePeriodicWork(
@@ -107,7 +108,7 @@ object DeviceSync {
     private fun stored(ctx: Context, key: String): JSONObject? =
         prefs(ctx).getString(key, null)?.let { runCatching { JSONObject(it) }.getOrNull() }
 
-    private fun inForce(ctx: Context) = Rules.pickPolicy(stored(ctx, KEY_POLICY), stored(ctx, KEY_LOCAL_POLICY))
+    private fun inForce(ctx: Context) = Rules.pickPolicy(stored(ctx, KEY_POLICY), stored(ctx, KEY_LOCAL_POLICY), HolVisit.visiting(ctx))
 
     /** The policy in force: the doc's, or the page-pushed one when its `rev` is higher (see [Rules.pickPolicy]). */
     fun policy(ctx: Context = app): JSONObject = inForce(ctx).first
@@ -118,10 +119,10 @@ object DeviceSync {
     /** The applied policy's `rev` (0 = none). */
     fun policyRev(ctx: Context = app): Long = Rules.rev(policy(ctx))
 
-    /** kiosk.policy.set: saves [p] (minus locked / command) as the local policy and applies it if it is newer. */
+    /** kiosk.policy.set: saves [p] (minus locked / command / hol) as the local policy and applies it if it is newer (or during a HOL visit). */
     fun setLocalPolicy(ctx: Context, p: JSONObject): JSONObject {
         if (!isSignedIn()) throw IllegalStateException("Not signed in")
-        val local = JSONObject(p.toString()).apply { remove("locked"); remove("command") }
+        val local = JSONObject(p.toString()).apply { remove("locked"); remove("command"); remove("hol") }
         prefs(ctx).edit().putString(KEY_LOCAL_POLICY, local.toString()).commit()
         applyPolicy()
         return JSONObject().put("rev", policyRev(ctx)).put("source", policySource(ctx))
@@ -161,8 +162,24 @@ object DeviceSync {
     fun signOut() {
         stopListener()
         auth.signOut()
+        HolVisit.clearLocal(app)
         prefs(app).edit().remove(KEY_DOC).remove(KEY_POLICY).remove(KEY_LOCAL_POLICY).remove(KEY_APPS_HASH).remove(KEY_USAGE_HASH).remove(KEY_CHILD_USAGE_HASH).remove(KEY_LOG_HASH).remove(KEY_TIME_HASH).remove(KEY_LOCAL_EXTRA).apply()
         listenerStatus = "Not signed in"
+        applyPolicy()
+    }
+
+    /** Re-applies the policy in force (used when a HOL visit starts or ends). */
+    fun applyPolicyNow() {
+        if (::app.isInitialized) applyPolicy()
+    }
+
+    fun clearLocalExtra(ctx: Context) {
+        prefs(ctx).edit().remove(KEY_LOCAL_EXTRA).commit()
+    }
+
+    /** Drops the page-pushed policy so the house doc is in force again (end of a HOL visit). */
+    fun dropLocalPolicy(ctx: Context) {
+        prefs(ctx).edit().remove(KEY_LOCAL_POLICY).commit()
         applyPolicy()
     }
 
@@ -760,6 +777,7 @@ object DeviceSync {
             "policySource" to policySource(ctx),
             "deviceTimeNow" to timeState(ctx).let { s -> mapOf("studentId" to (Prefs.activeStudentId(ctx) ?: ""), "allowed" to s.allowed, "why" to s.why,
                 "next" to (s.next ?: 0L), "until" to (s.until ?: 0L)) },
+            "hol" to HolVisit.status(ctx),
         )
     }
 
