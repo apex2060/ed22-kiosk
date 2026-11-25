@@ -36,10 +36,10 @@ object RemoteCommands {
     fun features(fullScreen: Boolean): List<String> = FEATURES + listOfNotNull(FULL_SCREEN_FEATURE.takeIf { fullScreen })
 
     /** Commands with an epoch-ms id that are only run while fresh and while the device is not locked. */
-    val TIMED_TYPES = setOf("openApp", "openTool", "ring", "ringStop", "screenshot")
+    val TIMED_TYPES = setOf("openApp", "openTool", "ring", "ringStop", "screenshot", "holLogout")
 
     /** Timed commands that also run while the device is locked (a lost device must ring; the parent may want to see the lock screen). */
-    val RING_TYPES = setOf("ring", "ringStop", "screenshot")
+    val RING_TYPES = setOf("ring", "ringStop", "screenshot", "holLogout")
 
     /** [run] = do it; [handled] = remember the id so it never runs again; [reason] for the log when not run. */
     data class Decision(val run: Boolean, val handled: Boolean, val reason: String)
