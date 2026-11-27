@@ -156,6 +156,9 @@ needs Android 9+ for the lock task feature; on Android 8 lock task mode hides it
 There is **no domain allowlist**: the kiosk starts on us.ed22.org but links can go anywhere on
 the web. Links that would leave the app (`tel:`, `mailto:`, Play Store and other app links)
 are ignored; `intent:` links open their web fallback if they have one.
+Every top-level http(s) page load (any domain) gets a `headless=true` query parameter, without
+duplicating it or dropping other query values or the `#hash`. POST form submissions and iframe
+document loads are not rewritten.
 
 > **History reporting is currently off.** `KioskConfig.HISTORY_ENABLED` is `false`, so the app
 > sends no history posts and queues no visits, and it deletes any queue left by an older build at
