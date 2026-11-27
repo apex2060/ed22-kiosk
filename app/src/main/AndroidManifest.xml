@@ -169,5 +169,9 @@
         <receiver
             android:name=".HolAlarmReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".DnsAlarmReceiver"
+            android:exported="false" />
     </application>
 </manifest>

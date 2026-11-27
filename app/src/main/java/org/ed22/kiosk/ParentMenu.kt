@@ -77,6 +77,7 @@ object ParentMenu {
         val sid = Prefs.activeStudentId(activity)
         val time = if (DeviceTime.limited(DeviceSync.policy(activity).optJSONObject("deviceTime"), sid)) DeviceSync.timeState(activity) else null
         val items = listOfNotNull<Pair<String, () -> Unit>>(
+            DnsFilter.paused(activity).takeIf { it }?.let { DnsPlan.PAUSED_TEXT to { showDns(activity) } },
             time?.let { (if (it.allowed) "Screen time: 30 more minutes" else "Screen time is up: give 30 more minutes") to { giveMoreTime(activity) } },
             "Exit kiosk mode" to { exit(activity, null, ParentPause.Kind.EXIT) },
             HolVisit.visiting(activity).takeIf { it }?.let {
@@ -219,12 +220,26 @@ object ParentMenu {
             .present(activity)
     }
 
+    /** Web filter fallback: the tablet stayed online without the filter; it switches back by itself. */
+    private fun showDns(activity: MainActivity) {
+        val s = DnsFilter.state(activity)
+        AlertDialog.Builder(activity)
+            .setTitle("Web filter paused")
+            .setMessage("This tablet can't reach the web filter (${s.err ?: "no connection"}), so it stayed online without it " +
+                "since ${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(s.since))}. " +
+                "It tries again every 5 minutes and whenever the network changes, and switches back by itself.")
+            .setNegativeButton("Close", null)
+            .create()
+            .present(activity)
+    }
+
     private fun showAccount(activity: MainActivity) {
         val note = DeviceSync.enforcementNote
         val message = "Signed in: ${DeviceSync.uid() ?: "no"}\n" +
             "Device doc: ${DeviceSync.deviceDocId(activity) ?: "—"}\n" +
             "Listener: ${DeviceSync.listenerStatus}\n" +
-            "Allowed apps now: ${DeviceSync.allowedPackages(activity).joinToString().ifEmpty { "none" }}" +
+            "Allowed apps now: ${DeviceSync.allowedPackages(activity).joinToString().ifEmpty { "none" }}\n" +
+            "Web filter: ${DnsFilter.state(activity).let { s -> s.mode + (s.err?.let { e -> " ($e)" } ?: "") }}" +
             (if (note.isNotEmpty()) "\n$note" else "")
         val builder = AlertDialog.Builder(activity)
             .setTitle("Account")

@@ -108,6 +108,7 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 
 | Option | What it does |
 | --- | --- |
+| Web filter paused — no connection to the filter | Shown only while the web filter has fallen back (see Web filter). Explains that the tablet stayed online without the filter and switches back by itself. |
 | Exit kiosk mode | Unlocks the device and goes to the normal home screen. Opening Little Explorer again, or restarting, locks it again. |
 | House of Learning: end visit now | Shown only during a visit. Ends the visiting family's session and returns to Quick Connect. Keeps the tablet's house registration. |
 | House of Learning device: On / Off | A flag stored on this tablet (it survives ending a visit and Account › Sign out). On signs out any personal account and makes this a House of Learning device. Off leaves the house list until you register it again. |
@@ -117,7 +118,7 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 | Reload start page | Goes back to https://us.ed22.org/mobile?headless=true. |
 | Change PIN | Sets a new parent PIN. |
 | Updates | Shows the installed version, the last update check and its result, with a **Check for updates now** button. |
-| Account | Shows the signed-in Firebase uid, the device doc id, the listener status (including errors such as `PERMISSION_DENIED`) and the apps allowed right now, with a **Sign out** button. Sign out does not turn off House of Learning. |
+| Account | Shows the signed-in Firebase uid, the device doc id, the listener status (including errors such as `PERMISSION_DENIED`), the apps allowed right now and the web filter mode, with a **Sign out** button. Sign out does not turn off House of Learning. |
 | Remove kiosk lock | Removes device-owner status so the app can be uninstalled. Locking again needs a factory reset. |
 
 Allowed apps are listed and opened by the ed22 page itself (the /mobile header apps icon) through `kiosk.apps.list()` / `kiosk.apps.launch()`.
@@ -228,6 +229,7 @@ kiosk.on('screen', e => ...);    // {on: bool} when the screen turns on or off
 kiosk.on('nfc', tag => ...);     // a tag was scanned (see NFC)
 kiosk.on('speech', e => ...);    // text-to-speech progress (see Speech)
 kiosk.on('policy', p => ...);    // the device doc's policy changed (see Device account and policy)
+kiosk.on('dns', s => ...);       // the web filter's status changed (same shape as kiosk.dns(), see Web filter)
 kiosk.off('battery', handler);
 ```
 
@@ -536,12 +538,38 @@ The rule logic is a Kotlin port (`Rules.kt`) of ed22's `edRules.js`, tested on t
 `kiosk.policy.set(policy)` saves the page's policy on the device (kept across restarts, cleared on sign-out) and
 applies it at once: rules, lock task allowlist and the check alarm. The doc's policy and the local one are both kept;
 the one with the higher `rev` (epoch ms, missing = 0) is in force, and a tie goes to the doc. So a doc snapshot with
-an older or missing `rev` doesn't replace a newer local push, and a newer doc policy does. `locked` and `command`
-always come from the doc. `kiosk.on('policy')`, `kiosk.getAuth().policy` and `kiosk.policy.get()` show the policy in
+an older or missing `rev` doesn't replace a newer local push, and a newer doc policy does. `locked`, `command`, `hol` and
+`dns` always come from the doc. `kiosk.on('policy')`, `kiosk.getAuth().policy` and `kiosk.policy.get()` show the policy in
 force; `status.policyRev` / `status.policySource` report it (a status report is sent when either changes).
 
 **Firestore rules** must let the signed-in custom-token uid read the doc and update its `status`
 field (for example, that uid is in the doc's `_writeIds` / `_readIds`).
+
+### Web filter
+
+`policy.dns` (written only by the Ed22 cloud, `/project/mobile/cloud/dnsFilter`) turns on a NextDNS filter through
+Android's Private DNS (Android 10+, device owner). The family tablet reads it from its `exp_` doc, a House of Learning
+tablet from its house explorer doc; `kiosk.policy.set` never carries it.
+
+- **Pick** (`DnsPlan.pick`, the same rules as the web side's `pick`): the first `windows` entry for today / now / the
+  active child, else `byStudent[studentId]`, else `host`. House tablets never use `byStudent`. Re-picked on a `rev`
+  change, a child change, each window start or end (exact alarm), boot, network change, screen on, and the 15-minute report.
+- **Apply:** `setGlobalPrivateDnsModeSpecifiedHost` on a worker thread, then `DISALLOW_CONFIG_PRIVATE_DNS`. Hosts must
+  end in `.dns.nextdns.io`, otherwise they are ignored and `err: 'BAD_HOST'` is reported. The mode in force before the
+  first apply is saved and restored (and the restriction lifted) when `policy.dns` is removed or `on: false`.
+- **Can't connect:** after 60 s of the filter failing on the default network (at once on a captive portal, or when the
+  set call fails for 60 s), the tablet switches to opportunistic Private DNS so it stays online and reports
+  `mode: 'fallback'`. It tries the filter again every 5 minutes and on every network change, and switches back by itself.
+  A fallback lasting 5 minutes sends one `{action: 'alert'}` POST (with the tablet's own Firebase ID token) per episode;
+  the cloud emails the parent / house. No network at all (airplane mode) is not a failure.
+- **Bypasses:** Chrome gets the managed config `DnsOverHttpsMode: off`; in child mode Firefox, Brave, Opera, Samsung
+  Internet and DuckDuckGo are never allowed (not even extra time) and `DISALLOW_CONFIG_VPN` is set.
+- **Report:** `status.dns` (family) or top-level `dns` (house) = `{mode: 'host'|'fallback'|'off'|'unsupported', host, why,
+  rev, ok, err, since, at}`, written right after an apply / fallback / restore and with every status report; `'dns'` is
+  in `status.features` (house: top-level `features`). `kiosk.dns()` returns the same plus `paused` / `text` for the
+  parent-mode banner.
+- The filter state is kept in its own prefs: Sign out and the end of a House of Learning visit don't clear it, and an
+  offline boot re-applies the last `policy.dns`.
 
 ## Automatic updates
 

@@ -135,8 +135,8 @@ object Rules {
 
     /**
      * The policy in force and its source: the [local] one (kiosk.policy.set) when its `rev` is higher than the
-     * [doc]'s, else the doc's (ties and missing revs go to the doc). `locked`, `command` and `hol` always come from
-     * the doc. DeviceSync.policy() then overlays the parent-menu hol.on flag, which is the source
+     * [doc]'s, else the doc's (ties and missing revs go to the doc). `locked`, `command`, `hol` and `dns` (the web
+     * filter, which only the Ed22 cloud writes) always come from the doc. DeviceSync.policy() then overlays the parent-menu hol.on flag, which is the source
      * of truth for House of Learning mode (including when signed out).
      *
      * [visit]: a House of Learning visit is in progress. The visiting family's local policy (allowedApps, deviceTime,
@@ -148,10 +148,11 @@ object Rules {
         val useLocal = local != null && (visit || rev(local) > rev(d))
         if (!useLocal) return d to "doc"
         val p = JSONObject(local.toString())
-        p.remove("locked"); p.remove("command"); p.remove("hol")
+        p.remove("locked"); p.remove("command"); p.remove("hol"); p.remove("dns")
         d.opt("locked")?.let { p.put("locked", it) }
         d.opt("command")?.let { p.put("command", it) }
         d.opt("hol")?.let { p.put("hol", it) }
+        d.opt("dns")?.let { p.put("dns", it) }
         return p to "local"
     }
 

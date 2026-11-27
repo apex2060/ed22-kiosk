@@ -129,6 +129,9 @@
     // The active child's screen time on this tablet: {allowed, why, left, until, next, ends, warn}. The tablet enforces it;
     // kiosk.on('deviceTime', fn) fires on changes and kiosk.on('deviceTimeWarning', fn) a few minutes before it runs out.
     deviceTime: method('deviceTime'),
+    // Web filter (Private DNS from policy.dns): {mode, host, why, rev, ok, err, since, at, paused, text}. kiosk.on('dns', fn) on changes.
+    // While paused (mode 'fallback'), parent mode should show `text` ("Web filter paused — no connection to the filter").
+    dns: method('dnsStatus'),
     // The child using the tablet (null = parent mode), for the allowed-apps rules; works offline.
     // An id string, or {studentId}. Objects are not String()'d (that would become "[object Object]").
     // An object with no studentId key is forwarded without that field so the native side leaves the active child unchanged.

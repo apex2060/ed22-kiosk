@@ -128,7 +128,7 @@ object DeviceSync {
         if (!HolDevicePlan.canSetLocalPolicy(isSignedIn(), HolDevice.on(ctx))) {
             throw IllegalStateException("Not signed in")
         }
-        val local = JSONObject(p.toString()).apply { remove("locked"); remove("command"); remove("hol") }
+        val local = JSONObject(p.toString()).apply { remove("locked"); remove("command"); remove("hol"); remove("dns") }
         prefs(ctx).edit().putString(KEY_LOCAL_POLICY, local.toString()).commit()
         applyPolicy()
         return JSONObject().put("rev", policyRev(ctx)).put("source", policySource(ctx))
@@ -234,6 +234,9 @@ object DeviceSync {
             // Group explorer docs write command at the top level; personal docs keep it under policy.command.
             (toJson(snap.get("command")) as? JSONObject)?.let { policy.put("command", it) }
             prefs(app).edit().putString(KEY_POLICY, policy.toString()).apply()
+            // Web filter: policy.dns always comes from the doc (kiosk.policy.set never carries it) and is kept in its own
+            // prefs, which sign-out and the HOL visit wipe leave alone. Before applyPolicy, so the browser limits are current.
+            DnsFilter.onDocPolicy(app, policy.optJSONObject("dns"))
             // /mobile's activeStudentId: applied when it changes in the doc; kiosk.setActiveChild overrides it locally.
             val docSid = Rules.docActiveStudentId(snap.get("activeStudentId"))
             if (docSid != Prefs.docStudentId(app)) {
@@ -444,7 +447,11 @@ object DeviceSync {
         val policy = policy(ctx)
         val strict = policy.optBoolean("strict", false)
         val states = Reclaim.lockedStates(policy.optBoolean("locked", false),
-            allowedEntries(policy).mapValues { (_, e) -> Rules.state(e, now, zone, sid, used, strict) })
+            allowedEntries(policy).mapValues { (pkg, e) ->
+                // Browsers with their own DNS-over-HTTPS: never for a child while the web filter is on (not even extra time).
+                if (DnsFilter.blocksApp(ctx, sid, pkg)) Rules.State(false, DnsPlan.WHY_BLOCKED)
+                else Rules.state(e, now, zone, sid, used, strict)
+            })
         if (!sid.isNullOrEmpty() && !timeState(ctx, now).allowed) return states.mapValues { Rules.State(false, "deviceTime") }
         return states
     }
@@ -525,6 +532,7 @@ object DeviceSync {
         Log.i(TAG, "Active child: ${sid ?: "parent"}")
         AppUsage.switchChild(ctx) { Prefs.setActiveStudentId(ctx, sid) }
         enforce(ctx)
+        DnsFilter.refresh("active child")
     }
 
     /**
@@ -804,6 +812,8 @@ object DeviceSync {
             "deviceTimeNow" to timeState(ctx).let { s -> mapOf("studentId" to (Prefs.activeStudentId(ctx) ?: ""), "allowed" to s.allowed, "why" to s.why,
                 "next" to (s.next ?: 0L), "until" to (s.until ?: 0L)) },
             "hol" to HolVisit.status(ctx),
+            // Web filter (DnsPlan.status): mode / host / why / rev / ok / err / since / at.
+            "dns" to DnsFilter.statusMap(ctx),
         )
     }
 
@@ -886,9 +896,28 @@ object DeviceSync {
         fields["current"] = hol.current ?: FieldValue.delete()
         fields["activeStudentId"] = hol.studentId ?: FieldValue.delete()
         fields["last"] = hol.last ?: FieldValue.delete()
+        fields["dns"] = DnsFilter.statusMap(ctx)
+        fields["features"] = FieldValue.arrayUnion(DnsPlan.FEATURE)
         fields["updatedOn"] = FieldValue.serverTimestamp()
         return ref.update(fields)
             .addOnFailureListener { e -> Log.w(TAG, "explorer status update failed", e) }
+    }
+
+    /**
+     * The web filter's status right after an apply / fallback / restore (otherwise it rides on the 15-minute report):
+     * family `status.dns`, house top-level `dns` + `features` (arrayUnion, so nothing else in the list is touched).
+     */
+    fun writeDnsStatus(ctx: Context, dns: Map<String, Any?>) {
+        if (auth.currentUser == null) return
+        if (HolDevice.on(ctx)) {
+            val ref = HolDevice.explorerRef(ctx) ?: return
+            ref.update(mapOf("dns" to dns, "features" to FieldValue.arrayUnion(DnsPlan.FEATURE)))
+                .addOnFailureListener { e -> Log.w(TAG, "explorer dns update failed", e) }
+            return
+        }
+        val id = deviceDocId(ctx) ?: return
+        val ref = deviceRef(ctx) ?: return
+        ref.update("status.dns", dns).addOnFailureListener { e -> Log.w(TAG, "status.dns update failed (${id.take(4)}…)", e) }
     }
 
     private val reportSoonRunnable = Runnable { runCatching { reportStatus(app) } }
@@ -926,6 +955,8 @@ object DeviceSync {
 
 class StatusWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
     override fun doWork(): Result = try {
+        // The web filter's safety net: re-pick / re-apply, and send a pending "filter can't connect" alert.
+        DnsFilter.tick()
         DeviceSync.reportStatus(applicationContext)?.let { Tasks.await(it, 60, TimeUnit.SECONDS) }
         Result.success()
     } catch (e: java.util.concurrent.TimeoutException) {
@@ -944,6 +975,8 @@ class PolicyAlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         DeviceSync.enforce(context)
+        // A clock or zone change can move the web filter into or out of a schedule window.
+        if (intent.action != null) DnsFilter.refresh("time change")
         MainActivity.current?.refreshAppsButton()
         if (intent.action == null && intent.getBooleanExtra(EXTRA_WARN, false) &&
             AppUsage.openPkg(context) != null && !MainActivity.inForeground

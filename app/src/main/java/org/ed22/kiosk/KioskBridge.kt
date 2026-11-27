@@ -83,6 +83,8 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
     private val appsListener: (Set<String>) -> Unit = { allowed -> emit("apps", JSONObject().put("allowed", JSONArray(allowed.sorted()))) }
     /** kiosk.on('deviceTime', s): the active child's screen time changed (pages may show it; the tablet enforces it). */
     private val timeListener: (DeviceTime.State) -> Unit = { s -> emit("deviceTime", s.toJson()) }
+    /** kiosk.on('dns', s): the web filter's status changed (s.paused / s.text for parent mode). */
+    private val dnsListener: (JSONObject) -> Unit = { s -> emit("dns", s) }
     private val timeWarnListener: (Int) -> Unit = { left -> emit("deviceTimeWarning", JSONObject().put("minutesLeft", left)) }
 
     private inner class Call(val id: Int, val proxy: JavaScriptReplyProxy) {
@@ -119,6 +121,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
         DeviceSync.addListener(policyListener)
         DeviceSync.appsListeners += appsListener
         DeviceSync.timeListeners += timeListener
+        DnsFilter.listeners += dnsListener
         DeviceSync.timeWarnListeners += timeWarnListener
     }
 
@@ -146,6 +149,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
         DeviceSync.removeListener(policyListener)
         DeviceSync.appsListeners -= appsListener
         DeviceSync.timeListeners -= timeListener
+        DnsFilter.listeners -= dnsListener
         DeviceSync.timeWarnListeners -= timeWarnListener
         sensors.clearAll()
         try {
@@ -283,6 +287,7 @@ class KioskBridge(private val activity: MainActivity) : WebViewCompat.WebMessage
             }
             "holReport" -> call.ok(HolVisit.report(activity, args))
             "deviceTime" -> call.ok(DeviceSync.timeState(activity).toJson())
+            "dnsStatus" -> call.ok(DnsFilter.statusJson(activity))
             "appsLaunch" -> {
                 DeviceSync.launch(activity, args.optString("package"))
                 call.ok()

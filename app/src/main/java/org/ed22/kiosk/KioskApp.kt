@@ -15,6 +15,8 @@ class KioskApp : Application() {
         KioskLog.add(this, "appStart", "Little Explorer ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) started")
         KioskLog.recordPastExits(this)
         NetworkWatch.start(this)
+        // Before DeviceSync, so the first device-doc snapshot's policy.dns is applied at once (and offline boots re-apply the last one).
+        DnsFilter.init(this)
         DeviceSync.init(this)
         KioskWatchdog.schedule(this)
         // Keeps the process out of Android's cached (frozen / killable) state while the child is in another app.
@@ -34,6 +36,7 @@ class KioskApp : Application() {
                         return
                     }
                     DeviceSync.enforce(context)
+                    DnsFilter.refresh("screen on")
                     // Screen back on: make sure the kiosk is still the one in front.
                     KioskWatchdog.checkSoon(context, 2_000)
                     val pkg = AppUsage.takePausedPkg(context) ?: return
