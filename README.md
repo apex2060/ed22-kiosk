@@ -1,7 +1,7 @@
 # Little Explorer
 
 An Android kiosk app that locks a device to a full-screen browser starting at
-**https://us.ed22.org/mobile**. It gives ed22.org pages a `window.kiosk` JavaScript API for
+**https://us.ed22.org/mobile?headless=true**. It gives ed22.org pages a `window.kiosk` JavaScript API for
 system information and device features, can report every page visit to
 **https://us.ed22.org/me/history** (currently turned off), and hides a PIN-protected parent menu behind
 **4 quick taps in the bottom-left corner**. Navigation is the system navigation bar (Back and
@@ -78,7 +78,7 @@ does nothing: factory reset it first.
    Without this, Take screenshot in the device manager shows only Little Explorer's own window,
    unless the accessibility service was already turned on.
 6. Open **Little Explorer**. Set the parent PIN (4 to 8 digits). The device locks into the kiosk
-   and opens https://us.ed22.org/mobile.
+   and opens https://us.ed22.org/mobile?headless=true.
 7. (Optional) Leave USB debugging on so you can push updates with adb later. Kids can't reach
    Settings from the kiosk, so it is safe to keep.
 
@@ -114,7 +114,7 @@ Taps still reach the page, so the gesture never blocks the site. Enter the paren
 | Register this tablet | Shown when House of Learning is on but the tablet is not yet registered to a house. Enter the 8-character code from the house Devices tab. The parent PIN is checked only on the tablet and is never sent. |
 | Wi-Fi | Joins or turns Wi-Fi on from inside the kiosk. Shown only after the parent PIN. |
 | Open Wi-Fi settings | Exits kiosk mode and opens Wi-Fi settings. |
-| Reload start page | Goes back to https://us.ed22.org/mobile. |
+| Reload start page | Goes back to https://us.ed22.org/mobile?headless=true. |
 | Change PIN | Sets a new parent PIN. |
 | Updates | Shows the installed version, the last update check and its result, with a **Check for updates now** button. |
 | Account | Shows the signed-in Firebase uid, the device doc id, the listener status (including errors such as `PERMISSION_DENIED`) and the apps allowed right now, with a **Sign out** button. Sign out does not turn off House of Learning. |
@@ -144,7 +144,7 @@ owner it is the persistent default home app, and lock task mode enables the Home
 | | In the kiosk | In another allowed app |
 | --- | --- | --- |
 | Back | Closes fullscreen video, then the popup (or goes back inside it), else goes back in page history | That app's own Back |
-| Home | Resets to https://us.ed22.org/mobile (closes any popup or fullscreen video first) | Returns to the kiosk where the child left off (no reset) |
+| Home | Resets to https://us.ed22.org/mobile?headless=true (closes any popup or fullscreen video first) | Returns to the kiosk where the child left off (no reset) |
 
 Returning with Home ends the `status.appUsage` session like any other return to the kiosk.
 **Holding** Home (or a long-press assistant gesture) can't be customized by the app. The Home button

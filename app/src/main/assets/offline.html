@@ -24,8 +24,8 @@
 <script>
   // Retries on its own every 10 s, whether or not navigator.onLine says we are online (it can stay stale in a
   // WebView). The app also leaves this page by itself when Android reports that the internet is back.
-  var target = decodeURIComponent(location.hash.slice(1)) || 'https://us.ed22.org/mobile';
-  if (!/^https?:\/\//.test(target)) target = 'https://us.ed22.org/mobile';
+  var target = decodeURIComponent(location.hash.slice(1)) || 'https://us.ed22.org/mobile?headless=true';
+  if (!/^https?:\/\//.test(target)) target = 'https://us.ed22.org/mobile?headless=true';
   var left = 10;
   var next = document.getElementById('next');
   function retry() {
