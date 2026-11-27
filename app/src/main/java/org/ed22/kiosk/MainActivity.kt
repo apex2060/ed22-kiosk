@@ -241,7 +241,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (HolVisit.takeLoadHome(this) || savedInstanceState == null || webView.restoreState(savedInstanceState) == null) {
+        val restored = !HolVisit.takeLoadHome(this) && savedInstanceState != null && webView.restoreState(savedInstanceState) != null
+        // A restored pre-upgrade /mobile (no headless) would otherwise keep the site toolbar until the next boot or Home.
+        if (!restored || KioskConfig.needsHeadlessStart(webView.url)) {
             webView.loadUrl(KioskConfig.START_URL)
         }
         HistoryReporter.flush(this)
