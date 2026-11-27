@@ -153,12 +153,21 @@ needs Android 9+ for the lock task feature; on Android 8 lock task mode hides it
 
 ## Browsing and history reporting
 
-There is **no domain allowlist**: the kiosk starts on us.ed22.org but links can go anywhere on
-the web. Links that would leave the app (`tel:`, `mailto:`, Play Store and other app links)
-are ignored; `intent:` links open their web fallback if they have one.
-Every top-level http(s) page load (any domain) gets a `headless=true` query parameter, without
-duplicating it or dropping other query values or the `#hash`. POST form submissions and iframe
-document loads are not rewritten.
+Top-level browsing is limited to the exact host **us.ed22.org**. Links, redirects, `window.open`
+popups and `intent:` web fallbacks to any other host are refused; the current page stays on
+screen and a short toast says "That page isn't allowed". `tel:`, `mailto:`, Play Store and other
+app or browser intents are also refused, so they never open another app. Subresources (images,
+scripts, XHR — Stripe, Clarity, CDN images, and so on) still load. Iframe document loads are
+not filtered (add-on frames such as `#mToolFrame` and payment iframes would break if they were).
+Allowed pages still get a `headless=true` query parameter, without duplicating it or dropping
+other query values or the `#hash`. POST form submissions are not rewritten.
+
+**Sign-in popups:** parent sign-in on `/mobile` uses Firebase `signInWithPopup`, which the kiosk
+opens in an in-app overlay. Only in that popup, `accounts.google.com`, `accounts.youtube.com`
+and `*.firebaseapp.com` may load. Those hosts are not allowed in the main WebView. The offline
+page (`file:///android_asset/`), `about:blank`, `data:` and `blob:` are allowed for internal use.
+Native allowed-app launching (`kiosk.apps.launch` / `openApp`) is not a WebView navigation and
+is unchanged.
 
 > **History reporting is currently off.** `KioskConfig.HISTORY_ENABLED` is `false`, so the app
 > sends no history posts and queues no visits, and it deletes any queue left by an older build at

@@ -36,6 +36,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -242,12 +243,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         val restored = !HolVisit.takeLoadHome(this) && savedInstanceState != null && webView.restoreState(savedInstanceState) != null
+        val restoredUrl = if (restored) webView.url else null
         // A restored pre-upgrade /mobile (no headless) would otherwise keep the site toolbar until the next boot or Home.
-        if (!restored || KioskConfig.needsHeadlessStart(webView.url)) {
-            webView.loadUrl(KioskConfig.START_URL)
-        } else if (HeadlessUrl.needsHeadless(webView.url)) {
-            // Any other restored http(s) page also gets headless=true, without going back to the start page.
-            webView.loadUrl(HeadlessUrl.withHeadless(webView.url!!))
+        // A restored page outside us.ed22.org (from a build before the domain lock) is sent home, not shown.
+        when {
+            !restored || KioskConfig.needsHeadlessStart(restoredUrl) -> webView.loadUrl(KioskConfig.START_URL)
+            !AllowedNav.allowsTopLevel(restoredUrl) -> webView.loadUrl(KioskConfig.START_URL)
+            HeadlessUrl.needsHeadless(restoredUrl) -> webView.loadUrl(HeadlessUrl.withHeadless(restoredUrl!!))
         }
         HistoryReporter.flush(this)
         Updater.schedule(this)
@@ -838,7 +840,8 @@ class MainActivity : AppCompatActivity() {
             Recovery.PageAction.NONE -> Unit
             Recovery.PageAction.RETRY_TARGET -> {
                 lastRecoveryAt = now
-                val target = HeadlessUrl.withHeadless(Recovery.offlineTarget(webView.url, KioskConfig.START_URL))
+                val raw = HeadlessUrl.withHeadless(Recovery.offlineTarget(webView.url, KioskConfig.START_URL))
+                val target = if (AllowedNav.allowsTopLevel(raw)) raw else KioskConfig.START_URL
                 KioskLog.add(this, "pageRecover", "Internet back: leaving the offline page for $target")
                 webView.loadUrl(target)
             }
@@ -931,21 +934,42 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Same rules for the main page and popups: web links stay in the app, everything else is blocked. */
-    private fun blockNavigation(view: WebView, uri: Uri): Boolean = when (uri.scheme?.lowercase()) {
-        "http", "https", "about", "data", "blob", "javascript" -> false
-        "intent" -> {
-            // Open the web fallback of an app link instead of leaving the kiosk.
-            val fallback = try {
-                Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).getStringExtra("browser_fallback_url")
-            } catch (e: Exception) {
-                null
-            }
-            if (fallback != null && fallback.startsWith("http")) view.loadUrl(HeadlessUrl.withHeadless(fallback))
-            true
+    /**
+     * Refuse a top-level navigation and stay on the current page. A blank sign-in popup is closed
+     * so the child is not left looking at an empty overlay.
+     */
+    private fun refuseNavigation(view: WebView) {
+        Toast.makeText(this, "That page isn't allowed", Toast.LENGTH_SHORT).show()
+        if (view === popup) {
+            val here = view.url
+            if (here.isNullOrEmpty() || here == "about:blank" || here.startsWith("about:blank")) closePopup()
         }
-        // tel:, mailto:, market:, file: and other links would leave the kiosk or read local files.
-        else -> true
+    }
+
+    /** A disallowed URL already started loading (e.g. JS skipped shouldOverride): abort and leave the previous page. */
+    private fun bounceDisallowed(view: WebView) {
+        view.stopLoading()
+        Toast.makeText(this, "That page isn't allowed", Toast.LENGTH_SHORT).show()
+        when {
+            view.canGoBack() -> view.goBack()
+            view === popup -> closePopup()
+            view === webView -> view.loadUrl(KioskConfig.START_URL)
+        }
+    }
+
+    /** intent: never leaves the kiosk; a us.ed22.org (or auth-popup) http(s) fallback may load. */
+    private fun handleIntentUrl(view: WebView, uri: Uri) {
+        val fallback = try {
+            Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME).getStringExtra("browser_fallback_url")
+        } catch (e: Exception) {
+            null
+        }
+        val inPopup = view === popup
+        if (fallback != null && AllowedNav.allowsTopLevel(fallback, inAuthPopup = inPopup)) {
+            view.loadUrl(HeadlessUrl.withHeadless(fallback))
+        } else {
+            refuseNavigation(view)
+        }
     }
 
     /**
@@ -961,6 +985,13 @@ class MainActivity : AppCompatActivity() {
         child.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
                 handleNavigation(view, request)
+
+            // Some initial popup loads skip shouldOverride; catch a foreign URL here and close the overlay.
+            override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+                if (!AllowedNav.allowsTopLevel(url, inAuthPopup = true)) {
+                    handler.post { if (popup === view) bounceDisallowed(view) }
+                }
+            }
 
             // All WebViews share one renderer. If any of them returns false here, Android kills the whole app,
             // so the popup handles it too (the main WebView rebuilds itself).
@@ -1042,17 +1073,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Same rules for the main page and popups: block leaving the kiosk, and for a top-level GET
+     * Same rules for the main page and popups: refuse any top-level URL that is not allowed
+     * ([AllowedNav]), never open an external app or browser, and for an allowed top-level GET
      * (including redirects) load the URL with headless=true instead of the original so the rewritten
      * page is the only history entry and a URL that already has the param is not reloaded (no loops).
      * POST form submissions are left alone — rewriting the URL would turn them into a GET and drop the body.
-     * Subframe / iframe document loads are not rewritten here (isForMainFrame is false).
+     * Subframe / iframe document loads are not filtered or rewritten here (isForMainFrame is false),
+     * except non-web schemes (intent, tel, market, …) which are always refused so they cannot leave
+     * the kiosk from an iframe either.
      */
     private fun handleNavigation(view: WebView, request: WebResourceRequest): Boolean {
-        if (blockNavigation(view, request.url)) return true
+        val uri = request.url
+        val scheme = uri.scheme?.lowercase(Locale.US)
+        if (scheme == "intent") {
+            handleIntentUrl(view, uri)
+            return true
+        }
+        if (scheme !in AllowedNav.WEB_SCHEMES) {
+            refuseNavigation(view)
+            return true
+        }
         if (!request.isForMainFrame) return false
+        if (!AllowedNav.allowsTopLevel(uri.toString(), inAuthPopup = view === popup)) {
+            refuseNavigation(view)
+            return true
+        }
         if (!request.method.equals("GET", ignoreCase = true)) return false
-        val raw = request.url.toString()
+        val raw = uri.toString()
         val next = HeadlessUrl.withHeadless(raw)
         if (next == raw) return false
         view.loadUrl(next)
@@ -1064,6 +1111,11 @@ class MainActivity : AppCompatActivity() {
             handleNavigation(view, request)
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+            // JS location changes can skip shouldOverrideUrlLoading; bounce off a foreign host.
+            if (!url.startsWith(OFFLINE_URL) && !AllowedNav.allowsTopLevel(url, inAuthPopup = view === popup)) {
+                bounceDisallowed(view)
+                return
+            }
             bridge.onNavigation(view, url)
             if (view === webView) {
                 setPageHasAppsUi(false)
