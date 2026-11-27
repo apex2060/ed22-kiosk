@@ -27,6 +27,8 @@ object RemoteCommands {
         "screenshot",
         // House of Learning device: visiting family's rules, kiosk.hol.end / setVisit / report, status.hol.
         "hol",
+        // Web filter through Private DNS: policy.dns applied, status.dns reported (DnsPlan / DnsFilter).
+        DnsPlan.FEATURE,
     )
 
     /** Listed only while the accessibility service can capture the whole screen (Android 11+, enabled and connected). */
