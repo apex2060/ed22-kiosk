@@ -245,6 +245,9 @@ class MainActivity : AppCompatActivity() {
         // A restored pre-upgrade /mobile (no headless) would otherwise keep the site toolbar until the next boot or Home.
         if (!restored || KioskConfig.needsHeadlessStart(webView.url)) {
             webView.loadUrl(KioskConfig.START_URL)
+        } else if (HeadlessUrl.needsHeadless(webView.url)) {
+            // Any other restored http(s) page also gets headless=true, without going back to the start page.
+            webView.loadUrl(HeadlessUrl.withHeadless(webView.url!!))
         }
         HistoryReporter.flush(this)
         Updater.schedule(this)
@@ -835,14 +838,16 @@ class MainActivity : AppCompatActivity() {
             Recovery.PageAction.NONE -> Unit
             Recovery.PageAction.RETRY_TARGET -> {
                 lastRecoveryAt = now
-                val target = Recovery.offlineTarget(webView.url, KioskConfig.START_URL)
+                val target = HeadlessUrl.withHeadless(Recovery.offlineTarget(webView.url, KioskConfig.START_URL))
                 KioskLog.add(this, "pageRecover", "Internet back: leaving the offline page for $target")
                 webView.loadUrl(target)
             }
             Recovery.PageAction.RELOAD -> {
                 lastRecoveryAt = now
-                KioskLog.add(this, "pageRecover", "Internet back: reloading ${webView.url} (it ${if (lastLoadFailed) "failed" else "loaded with errors"} while offline)")
-                webView.reload()
+                val here = webView.url
+                KioskLog.add(this, "pageRecover", "Internet back: reloading ${here} (it ${if (lastLoadFailed) "failed" else "loaded with errors"} while offline)")
+                if (here != null && HeadlessUrl.needsHeadless(here)) webView.loadUrl(HeadlessUrl.withHeadless(here))
+                else webView.reload()
             }
         }
     }
@@ -936,7 +941,7 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 null
             }
-            if (fallback != null && fallback.startsWith("http")) view.loadUrl(fallback)
+            if (fallback != null && fallback.startsWith("http")) view.loadUrl(HeadlessUrl.withHeadless(fallback))
             true
         }
         // tel:, mailto:, market:, file: and other links would leave the kiosk or read local files.
@@ -955,7 +960,7 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptThirdPartyCookies(child, true)
         child.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
-                blockNavigation(view, request.url)
+                handleNavigation(view, request)
 
             // All WebViews share one renderer. If any of them returns false here, Android kills the whole app,
             // so the popup handles it too (the main WebView rebuilds itself).
@@ -1036,9 +1041,27 @@ class MainActivity : AppCompatActivity() {
         customViewCallback = null
     }
 
+    /**
+     * Same rules for the main page and popups: block leaving the kiosk, and for a top-level GET
+     * (including redirects) load the URL with headless=true instead of the original so the rewritten
+     * page is the only history entry and a URL that already has the param is not reloaded (no loops).
+     * POST form submissions are left alone — rewriting the URL would turn them into a GET and drop the body.
+     * Subframe / iframe document loads are not rewritten here (isForMainFrame is false).
+     */
+    private fun handleNavigation(view: WebView, request: WebResourceRequest): Boolean {
+        if (blockNavigation(view, request.url)) return true
+        if (!request.isForMainFrame) return false
+        if (!request.method.equals("GET", ignoreCase = true)) return false
+        val raw = request.url.toString()
+        val next = HeadlessUrl.withHeadless(raw)
+        if (next == raw) return false
+        view.loadUrl(next)
+        return true
+    }
+
     private inner class KioskWebViewClient : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-            blockNavigation(view, request.url)
+            handleNavigation(view, request)
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             bridge.onNavigation(view, url)
